@@ -5907,6 +5907,29 @@ static qboolean UI_CheckPassword( void )
 UI_JoinServer
 ==================
 */
+static void UI_QueueSplitScreenNetworkJoins( void )
+{
+	int player;
+	int playerCount;
+
+	if ( !trap->Cvar_VariableValue( "cl_splitScreen" ) ) {
+		return;
+	}
+
+	playerCount = (int)trap->Cvar_VariableValue( "ui_splitScreenPlayerCount" );
+	if ( playerCount < 2 ) {
+		playerCount = 2;
+	} else if ( playerCount > 4 ) {
+		playerCount = 4;
+	}
+
+	trap->Cmd_ExecuteText( EXEC_APPEND, "wait 420 ; cmd team free ; wait 20" );
+	for ( player = 2; player <= playerCount; player++ ) {
+		trap->Cmd_ExecuteText( EXEC_APPEND, va( " ; cmd splitscreen_join %i ; wait 30", player ) );
+	}
+	trap->Cmd_ExecuteText( EXEC_APPEND, "\n" );
+}
+
 static void UI_JoinServer( void )
 {
 	char buff[1024] = {0};
@@ -5918,6 +5941,7 @@ static void UI_JoinServer( void )
 	{
 		trap->LAN_GetServerAddressString(UI_SourceForLAN()/*ui_netSource.integer*/, uiInfo.serverStatus.displayServers[uiInfo.serverStatus.currentServer], buff, sizeof( buff ) );
 		trap->Cmd_ExecuteText( EXEC_APPEND, va( "connect %s\n", buff ) );
+		UI_QueueSplitScreenNetworkJoins();
 	}
 
 }
@@ -6228,6 +6252,38 @@ static int UI_SplitScreenInputIndex( const char *inputName )
 		return 3;
 	}
 	return -1;
+}
+
+static const char *UI_SplitScreenButtonLabel( int button )
+{
+	switch ( button )
+	{
+		case 0: return "A / Cross";
+		case 1: return "B / Circle";
+		case 2: return "X / Square";
+		case 3: return "Y / Triangle";
+		case 4: return "Left Bumper";
+		case 5: return "Right Bumper";
+		case 6: return "Back / Select";
+		case 7: return "Start / Menu";
+		case 8: return "Left Stick";
+		case 9: return "Right Stick";
+		case 10: return "Button 10";
+		case 11: return "Button 11";
+		case 12: return "Button 12";
+		case 13: return "Button 13";
+		case 14: return "Button 14";
+		case 15: return "Button 15";
+		default: return "Unassigned";
+	}
+}
+
+static qboolean UI_SplitScreenInputIsKeyboard( int player )
+{
+	char inputName[64] = {0};
+
+	trap->Cvar_VariableStringBuffer( UI_SplitScreenInputCvarName( player ), inputName, sizeof( inputName ) );
+	return (qboolean)( UI_SplitScreenInputIndex( inputName ) == 0 );
 }
 
 static const char *UI_SplitScreenProfileCvarName( int player, const char *field )
@@ -6813,6 +6869,7 @@ static void UI_RunMenuScript(char **args)
 			trap->Cvar_Set("ui_singlePlayerActive", "0");
 			if (uiInfo.currentFoundPlayerServer >= 0 && uiInfo.currentFoundPlayerServer < uiInfo.numFoundPlayerServers) {
 				trap->Cmd_ExecuteText( EXEC_APPEND, va( "connect %s\n", uiInfo.foundPlayerServerAddresses[uiInfo.currentFoundPlayerServer] ) );
+				UI_QueueSplitScreenNetworkJoins();
 			}
 		} else if (Q_stricmp(name, "Quit") == 0) {
 			trap->Cvar_Set("ui_singlePlayerActive", "0");
@@ -11476,6 +11533,11 @@ static void UI_PaintSplitScreenControlsMenu( void )
 		int inputIndex;
 		int sensitivity = (int)trap->Cvar_VariableValue( va( "cl_splitScreenP%iSensitivity", player ) );
 		int invert = (int)trap->Cvar_VariableValue( va( "cl_splitScreenP%iInvert", player ) );
+		int attack = (int)trap->Cvar_VariableValue( va( "cl_splitScreenP%iAttackButton", player ) );
+		int altAttack = (int)trap->Cvar_VariableValue( va( "cl_splitScreenP%iAltAttackButton", player ) );
+		int use = (int)trap->Cvar_VariableValue( va( "cl_splitScreenP%iUseButton", player ) );
+		int jump = (int)trap->Cvar_VariableValue( va( "cl_splitScreenP%iJumpButton", player ) );
+		qboolean keyboardInput;
 
 		if ( sensitivity <= 0 ) {
 			sensitivity = 140;
@@ -11484,15 +11546,23 @@ static void UI_PaintSplitScreenControlsMenu( void )
 		UI_SplitScreenSetupViewport( player, playerCount, &x, &y, &w, &h );
 		trap->Cvar_VariableStringBuffer( UI_SplitScreenInputCvarName( player ), inputName, sizeof( inputName ) );
 		inputIndex = UI_SplitScreenInputIndex( inputName );
+		keyboardInput = (qboolean)( inputIndex == 0 );
 		textScale = playerCount > 2 ? .38f : .48f;
 
 		UI_PaintSplitScreenPanelTitle( x, y, w, va( "PLAYER %i CONTROLS", player ), isActive );
-		Text_Paint( x + 18.0f, y + 74.0f, textScale, row == 0 && isActive ? gold : white, va( "Input: %s", UI_SplitScreenInputLabel( inputIndex ) ), 0, 0, ITEM_TEXTSTYLE_SHADOWED, FONT_MEDIUM );
-		Text_Paint( x + 18.0f, y + 102.0f, textScale, row == 1 && isActive ? gold : white, va( "Look Sensitivity: %i", sensitivity ), 0, 0, ITEM_TEXTSTYLE_SHADOWED, FONT_MEDIUM );
-		Text_Paint( x + 18.0f, y + 130.0f, textScale, row == 2 && isActive ? gold : white, va( "Invert Look Y: %s", invert ? "On" : "Off" ), 0, 0, ITEM_TEXTSTYLE_SHADOWED, FONT_MEDIUM );
-		Text_Paint( x + 18.0f, y + 158.0f, textScale, row == 3 && isActive ? gold : white, "Reset Controller Axes", 0, 0, ITEM_TEXTSTYLE_SHADOWED, FONT_MEDIUM );
-		Text_Paint( x + 18.0f, y + 190.0f, textScale * .86f, white, "Left stick move / Right stick look", 0, 0, ITEM_TEXTSTYLE_SHADOWED, FONT_MEDIUM );
-		Text_Paint( x + 18.0f, y + 214.0f, textScale * .86f, white, "A attack  B alt  X use  Y jump", 0, 0, ITEM_TEXTSTYLE_SHADOWED, FONT_MEDIUM );
+		Text_Paint( x + 18.0f, y + 66.0f, textScale, row == 0 && isActive ? gold : white, va( "Input: %s", UI_SplitScreenInputLabel( inputIndex ) ), 0, 0, ITEM_TEXTSTYLE_SHADOWED, FONT_MEDIUM );
+		if ( keyboardInput ) {
+			Text_Paint( x + 18.0f, y + 100.0f, textScale, white, "Bindings: Stock Controls", 0, 0, ITEM_TEXTSTYLE_SHADOWED, FONT_MEDIUM );
+			Text_Paint( x + 18.0f, y + 126.0f, textScale, white, "Mouse Aim: Stock Controls", 0, 0, ITEM_TEXTSTYLE_SHADOWED, FONT_MEDIUM );
+			continue;
+		}
+		Text_Paint( x + 18.0f, y + 88.0f, textScale, row == 1 && isActive ? gold : white, va( "Sensitivity: %i", sensitivity ), 0, 0, ITEM_TEXTSTYLE_SHADOWED, FONT_MEDIUM );
+		Text_Paint( x + 18.0f, y + 110.0f, textScale, row == 2 && isActive ? gold : white, va( "Invert Y: %s", invert ? "On" : "Off" ), 0, 0, ITEM_TEXTSTYLE_SHADOWED, FONT_MEDIUM );
+		Text_Paint( x + 18.0f, y + 132.0f, textScale, row == 3 && isActive ? gold : white, va( "Attack: %s", UI_SplitScreenButtonLabel( attack ) ), 0, 0, ITEM_TEXTSTYLE_SHADOWED, FONT_MEDIUM );
+		Text_Paint( x + 18.0f, y + 154.0f, textScale, row == 4 && isActive ? gold : white, va( "Alt Attack: %s", UI_SplitScreenButtonLabel( altAttack ) ), 0, 0, ITEM_TEXTSTYLE_SHADOWED, FONT_MEDIUM );
+		Text_Paint( x + 18.0f, y + 176.0f, textScale, row == 5 && isActive ? gold : white, va( "Use: %s", UI_SplitScreenButtonLabel( use ) ), 0, 0, ITEM_TEXTSTYLE_SHADOWED, FONT_MEDIUM );
+		Text_Paint( x + 18.0f, y + 198.0f, textScale, row == 6 && isActive ? gold : white, va( "Jump: %s", UI_SplitScreenButtonLabel( jump ) ), 0, 0, ITEM_TEXTSTYLE_SHADOWED, FONT_MEDIUM );
+		Text_Paint( x + 18.0f, y + 220.0f, textScale, row == 7 && isActive ? gold : white, "Reset Axes + Buttons", 0, 0, ITEM_TEXTSTYLE_SHADOWED, FONT_MEDIUM );
 	}
 
 	UI_FillRect( 0, SCREEN_HEIGHT / 2.0f - 1.0f, SCREEN_WIDTH, 2, divider );
@@ -11715,18 +11785,51 @@ static void UI_AdjustSplitScreenControls( int player, int direction )
 		return;
 	}
 
-	if ( row == 3 ) {
+	if ( row >= 3 && row <= 6 ) {
+		const char *buttonCvar = "AttackButton";
+		int button;
+
+		if ( row == 4 ) {
+			buttonCvar = "AltAttackButton";
+		} else if ( row == 5 ) {
+			buttonCvar = "UseButton";
+		} else if ( row == 6 ) {
+			buttonCvar = "JumpButton";
+		}
+
+		button = (int)trap->Cvar_VariableValue( va( "cl_splitScreenP%i%s", player, buttonCvar ) );
+		button += direction;
+		if ( button < 0 ) {
+			button = 15;
+		} else if ( button > 15 ) {
+			button = 0;
+		}
+		trap->Cvar_Set( va( "cl_splitScreenP%i%s", player, buttonCvar ), va( "%i", button ) );
+		return;
+	}
+
+	if ( row == 7 ) {
 		trap->Cvar_Set( va( "cl_splitScreenP%iMoveSideAxis", player ), "0" );
 		trap->Cvar_Set( va( "cl_splitScreenP%iMoveForwardAxis", player ), "1" );
 		trap->Cvar_Set( va( "cl_splitScreenP%iLookYawAxis", player ), "2" );
 		trap->Cvar_Set( va( "cl_splitScreenP%iLookPitchAxis", player ), "3" );
+		trap->Cvar_Set( va( "cl_splitScreenP%iAttackButton", player ), "0" );
+		trap->Cvar_Set( va( "cl_splitScreenP%iAltAttackButton", player ), "1" );
+		trap->Cvar_Set( va( "cl_splitScreenP%iUseButton", player ), "2" );
+		trap->Cvar_Set( va( "cl_splitScreenP%iJumpButton", player ), "3" );
 	}
+}
+
+static int UI_SplitScreenControlsMaxRow( int player )
+{
+	return UI_SplitScreenInputIsKeyboard( player ) ? 0 : 7;
 }
 
 static qboolean UI_HandleSplitScreenControlsKey( int key, qboolean down )
 {
 	int player;
 	int row;
+	int maxRow;
 
 	if ( !UI_SplitScreenModeVisible( "controls" ) ) {
 		return qfalse;
@@ -11737,17 +11840,22 @@ static qboolean UI_HandleSplitScreenControlsKey( int key, qboolean down )
 
 	player = UI_SplitScreenInputTargetPlayer();
 	row = (int)trap->Cvar_VariableValue( "ui_splitScreenActionRow" );
+	maxRow = UI_SplitScreenControlsMaxRow( player );
+	if ( row > maxRow ) {
+		row = maxRow;
+		trap->Cvar_Set( "ui_splitScreenActionRow", va( "%i", row ) );
+	}
 
 	if ( key == A_ESCAPE || key == A_BACKSPACE ) {
 		UI_ReturnToSplitScreenTopMenu( player );
 		return qtrue;
 	}
 	if ( key == A_CURSOR_UP ) {
-		UI_SplitScreenSetActionRow( row - 1, 3 );
+		UI_SplitScreenSetActionRow( row - 1, maxRow );
 		return qtrue;
 	}
 	if ( key == A_CURSOR_DOWN ) {
-		UI_SplitScreenSetActionRow( row + 1, 3 );
+		UI_SplitScreenSetActionRow( row + 1, maxRow );
 		return qtrue;
 	}
 	if ( key == A_CURSOR_LEFT ) {

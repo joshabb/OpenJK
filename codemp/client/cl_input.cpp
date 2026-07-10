@@ -45,6 +45,10 @@ static cvar_t	*cl_splitScreenMoveSideAxis[5] = { NULL, NULL, NULL, NULL, NULL };
 static cvar_t	*cl_splitScreenMoveForwardAxis[5] = { NULL, NULL, NULL, NULL, NULL };
 static cvar_t	*cl_splitScreenLookYawAxis[5] = { NULL, NULL, NULL, NULL, NULL };
 static cvar_t	*cl_splitScreenLookPitchAxis[5] = { NULL, NULL, NULL, NULL, NULL };
+static cvar_t	*cl_splitScreenAttackButton[5] = { NULL, NULL, NULL, NULL, NULL };
+static cvar_t	*cl_splitScreenAltAttackButton[5] = { NULL, NULL, NULL, NULL, NULL };
+static cvar_t	*cl_splitScreenUseButton[5] = { NULL, NULL, NULL, NULL, NULL };
+static cvar_t	*cl_splitScreenJumpButton[5] = { NULL, NULL, NULL, NULL, NULL };
 static vec3_t cl_splitScreenViewangles[5];
 static qboolean cl_splitScreenViewInitialized[5] = { qfalse, qfalse, qfalse, qfalse, qfalse };
 static int cl_splitScreenNextCmdTime[5] = { 0, 0, 0, 0, 0 };
@@ -1119,16 +1123,16 @@ static void CL_SplitScreenCreateCmd( int player, usercmd_t *cmd ) {
 	cmd->forcesel = cl.cgameForceSelection;
 	cmd->invensel = cl.cgameInvenSelection;
 
-	if ( CL_SplitScreenButtonDown( player, 0 ) ) {
+	if ( CL_SplitScreenButtonDown( player, cl_splitScreenAttackButton[player]->integer ) ) {
 		cmd->buttons |= BUTTON_ATTACK;
 	}
-	if ( CL_SplitScreenButtonDown( player, 1 ) ) {
+	if ( CL_SplitScreenButtonDown( player, cl_splitScreenAltAttackButton[player]->integer ) ) {
 		cmd->buttons |= BUTTON_ALT_ATTACK;
 	}
-	if ( CL_SplitScreenButtonDown( player, 2 ) ) {
+	if ( CL_SplitScreenButtonDown( player, cl_splitScreenUseButton[player]->integer ) ) {
 		cmd->buttons |= BUTTON_USE;
 	}
-	if ( CL_SplitScreenButtonDown( player, 3 ) ) {
+	if ( CL_SplitScreenButtonDown( player, cl_splitScreenJumpButton[player]->integer ) ) {
 		cmd->upmove = 127;
 	}
 }
@@ -1934,6 +1938,10 @@ void CL_InitInput( void ) {
 		cl_splitScreenMoveForwardAxis[splitPlayer] = Cvar_Get( va( "cl_splitScreenP%iMoveForwardAxis", splitPlayer ), "1", CVAR_ARCHIVE_ND, va( "Player %i controller forward/back movement axis.", splitPlayer ) );
 		cl_splitScreenLookYawAxis[splitPlayer] = Cvar_Get( va( "cl_splitScreenP%iLookYawAxis", splitPlayer ), "2", CVAR_ARCHIVE_ND, va( "Player %i controller look yaw axis.", splitPlayer ) );
 		cl_splitScreenLookPitchAxis[splitPlayer] = Cvar_Get( va( "cl_splitScreenP%iLookPitchAxis", splitPlayer ), "3", CVAR_ARCHIVE_ND, va( "Player %i controller look pitch axis.", splitPlayer ) );
+		cl_splitScreenAttackButton[splitPlayer] = Cvar_Get( va( "cl_splitScreenP%iAttackButton", splitPlayer ), "0", CVAR_ARCHIVE_ND, va( "Player %i controller attack button.", splitPlayer ) );
+		cl_splitScreenAltAttackButton[splitPlayer] = Cvar_Get( va( "cl_splitScreenP%iAltAttackButton", splitPlayer ), "1", CVAR_ARCHIVE_ND, va( "Player %i controller alt attack button.", splitPlayer ) );
+		cl_splitScreenUseButton[splitPlayer] = Cvar_Get( va( "cl_splitScreenP%iUseButton", splitPlayer ), "2", CVAR_ARCHIVE_ND, va( "Player %i controller use button.", splitPlayer ) );
+		cl_splitScreenJumpButton[splitPlayer] = Cvar_Get( va( "cl_splitScreenP%iJumpButton", splitPlayer ), "3", CVAR_ARCHIVE_ND, va( "Player %i controller jump button.", splitPlayer ) );
 	}
 	Cvar_Get( "ui_splitScreenP1Name", "Padawan", CVAR_ARCHIVE_ND, "Split-screen Player 1 display name." );
 	Cvar_Get( "ui_splitScreenP1Model", DEFAULT_MODEL"/default", CVAR_ARCHIVE_ND, "Split-screen Player 1 model/skin." );
