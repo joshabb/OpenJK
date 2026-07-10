@@ -2437,7 +2437,28 @@ static void CG_ApplySplitScreenRect( int viewIndex ) {
 	const qboolean vertical = ( cl_splitScreenLayout.integer != 0 ) ? qtrue : qfalse;
 	const int playerCount = CG_SplitScreenPlayerCount();
 
-	if ( playerCount > 2 ) {
+	if ( playerCount == 3 ) {
+		const int halfWidth = cgs.glconfig.vidWidth / 2;
+		const int halfHeight = cgs.glconfig.vidHeight / 2;
+
+		if ( viewIndex == 0 ) {
+			cg.refdef.x = 0;
+			cg.refdef.y = 0;
+			cg.refdef.width = cgs.glconfig.vidWidth;
+			cg.refdef.height = halfHeight;
+		} else {
+			cg.refdef.x = viewIndex == 1 ? 0 : halfWidth;
+			cg.refdef.y = halfHeight;
+			cg.refdef.width = viewIndex == 1 ? halfWidth : cgs.glconfig.vidWidth - halfWidth;
+			cg.refdef.height = cgs.glconfig.vidHeight - halfHeight;
+		}
+
+		cg.refdef.width &= ~1;
+		cg.refdef.height &= ~1;
+		return;
+	}
+
+	if ( playerCount > 3 ) {
 		const int halfWidth = cgs.glconfig.vidWidth / 2;
 		const int halfHeight = cgs.glconfig.vidHeight / 2;
 
@@ -2445,11 +2466,6 @@ static void CG_ApplySplitScreenRect( int viewIndex ) {
 		cg.refdef.y = ( viewIndex >= 2 ) ? halfHeight : 0;
 		cg.refdef.width = ( viewIndex % 2 ) ? cgs.glconfig.vidWidth - halfWidth : halfWidth;
 		cg.refdef.height = ( viewIndex >= 2 ) ? cgs.glconfig.vidHeight - halfHeight : halfHeight;
-
-		if ( playerCount == 3 && viewIndex == 2 ) {
-			cg.refdef.x = cgs.glconfig.vidWidth / 4;
-			cg.refdef.width = halfWidth;
-		}
 
 		cg.refdef.width &= ~1;
 		cg.refdef.height &= ~1;
@@ -2967,6 +2983,7 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 		trap->R_SetColor( colorBlack );
 		trap->R_DrawStretchPic( 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, 0, cgs.media.whiteShader );
 		trap->R_SetColor( NULL );
+		CG_ApplySplitScreenRect( 0 );
 	}
 	CG_DrawActive( stereoView );
 	CG_DrawSplitScreenExtraViews();

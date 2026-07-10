@@ -6494,8 +6494,15 @@ static void UI_StartSplitScreenServer( void )
 		int player;
 
 		Com_sprintf( joinCommands, sizeof( joinCommands ), "wait ; wait ; devmap %s ; wait 300", map );
+		if ( gameType >= GT_TEAM ) {
+			Q_strcat( joinCommands, sizeof( joinCommands ), " ; cmd team red ; wait 20" );
+		}
 		for ( player = 2; player <= playerCount; player++ ) {
-			Q_strcat( joinCommands, sizeof( joinCommands ), va( " ; cmd splitscreen_join %i ; wait 20", player ) );
+			if ( gameType >= GT_TEAM ) {
+				Q_strcat( joinCommands, sizeof( joinCommands ), va( " ; cmd splitscreen_join %i %s ; wait 20", player, ( player & 1 ) ? "red" : "blue" ) );
+			} else {
+				Q_strcat( joinCommands, sizeof( joinCommands ), va( " ; cmd splitscreen_join %i ; wait 20", player ) );
+			}
 		}
 		Q_strcat( joinCommands, sizeof( joinCommands ), " ; splitscreen_menu\n" );
 		trap->Cmd_ExecuteText( EXEC_APPEND, joinCommands );
