@@ -3682,6 +3682,15 @@ static void Cmd_SplitScreenCmd_f( gentity_t *ent ) {
 	trap->Argv( argBase + 10, arg, sizeof( arg ) );
 	cmd.invensel = (byte)atoi( arg );
 
+	if ( g_entities[clientNum].client &&
+		g_entities[clientNum].client->ps.stats[STAT_HEALTH] <= 0 &&
+		level.time > g_entities[clientNum].client->respawnTime &&
+		!gDoSlowMoDuel &&
+		( cmd.buttons & ( BUTTON_ATTACK | BUTTON_USE_HOLDABLE ) ) ) {
+		ClientRespawn( &g_entities[clientNum] );
+		return;
+	}
+
 	trap->BotUserCommand( clientNum, &cmd );
 }
 
