@@ -3379,6 +3379,9 @@ ClientCommand
 #define CMD_CHEAT				(1<<1)
 #define CMD_ALIVE				(1<<2)
 
+qboolean g_splitScreenLocalClient[MAX_CLIENTS];
+static int g_splitScreenClientNums[5] = { -1, -1, -1, -1, -1 };
+
 typedef struct command_s {
 	const char	*name;
 	void		(*func)(gentity_t *ent);
@@ -3387,6 +3390,299 @@ typedef struct command_s {
 
 int cmdcmp( const void *a, const void *b ) {
 	return Q_stricmp( (const char *)a, ((command_t*)b)->name );
+}
+
+static int G_SplitScreenPlayerArg( int argIndex, int fallback ) {
+	char arg[MAX_TOKEN_CHARS];
+	int player;
+
+	if ( trap->Argc() <= argIndex ) {
+		return fallback;
+	}
+
+	trap->Argv( argIndex, arg, sizeof( arg ) );
+	player = atoi( arg );
+	if ( player < 2 || player > 4 ) {
+		return fallback;
+	}
+	return player;
+}
+
+static int G_FindSplitScreenClient( int player ) {
+	int i;
+
+	if ( player < 2 || player > 4 ) {
+		player = 2;
+	}
+
+	if ( g_splitScreenClientNums[player] >= 0 && g_splitScreenClientNums[player] < MAX_CLIENTS ) {
+		gentity_t *ent = &g_entities[g_splitScreenClientNums[player]];
+		if ( ent->client && ent->client->pers.connected == CON_CONNECTED && g_splitScreenLocalClient[g_splitScreenClientNums[player]] ) {
+			return g_splitScreenClientNums[player];
+		}
+	}
+
+	for ( i = 0; i < level.maxclients; i++ ) {
+		gentity_t *ent = &g_entities[i];
+		if ( !ent->client || ent->client->pers.connected != CON_CONNECTED ) {
+			continue;
+		}
+		if ( !Q_stricmp( ent->client->pers.netname_nocolor, va( "SplitPlayer%i", player ) ) ) {
+			g_splitScreenLocalClient[i] = qtrue;
+			g_splitScreenClientNums[player] = i;
+			return i;
+		}
+	}
+
+	return -1;
+}
+
+static void G_SetSplitScreenUserinfoFromCvar( char *userinfo, const char *key, const char *cvarName, const char *fallback ) {
+	char value[MAX_INFO_VALUE] = {0};
+
+	trap->Cvar_VariableStringBuffer( cvarName, value, sizeof( value ) );
+	if ( !value[0] ) {
+		Q_strncpyz( value, fallback, sizeof( value ) );
+	}
+
+	Info_SetValueForKey( userinfo, key, value );
+}
+
+static void G_ApplySplitScreenProfileToUserinfo( int player, char *userinfo ) {
+	const char *defaultColor = player == 3 ? "2" : ( player == 4 ? "5" : "4" );
+
+	G_SetSplitScreenUserinfoFromCvar( userinfo, "name", va( "ui_splitScreenP%iName", player ), va( "SplitPlayer%i", player ) );
+	G_SetSplitScreenUserinfoFromCvar( userinfo, "model", va( "ui_splitScreenP%iModel", player ), DEFAULT_MODEL"/default" );
+	G_SetSplitScreenUserinfoFromCvar( userinfo, "saber1", va( "ui_splitScreenP%iSaber1", player ), DEFAULT_SABER );
+	G_SetSplitScreenUserinfoFromCvar( userinfo, "saber2", va( "ui_splitScreenP%iSaber2", player ), "none" );
+	G_SetSplitScreenUserinfoFromCvar( userinfo, "color1", va( "ui_splitScreenP%iColor1", player ), defaultColor );
+	G_SetSplitScreenUserinfoFromCvar( userinfo, "color2", va( "ui_splitScreenP%iColor2", player ), "3" );
+	G_SetSplitScreenUserinfoFromCvar( userinfo, "char_color_red", va( "ui_splitScreenP%iCharRed", player ), "255" );
+	G_SetSplitScreenUserinfoFromCvar( userinfo, "char_color_green", va( "ui_splitScreenP%iCharGreen", player ), "255" );
+	G_SetSplitScreenUserinfoFromCvar( userinfo, "char_color_blue", va( "ui_splitScreenP%iCharBlue", player ), "255" );
+	G_SetSplitScreenUserinfoFromCvar( userinfo, "forcepowers", va( "ui_splitScreenP%iForcePowers", player ), DEFAULT_FORCEPOWERS );
+}
+
+static int G_CreateSplitScreenClient( gentity_t *owner, int player ) {
+	int clientNum;
+	gentity_t *bot;
+	char userinfo[MAX_INFO_STRING] = {0};
+	const char *team = "red";
+
+	if ( player < 2 || player > 4 ) {
+		player = 2;
+	}
+
+	clientNum = trap->BotAllocateClient();
+	if ( clientNum == -1 ) {
+		trap->SendServerCommand( owner->s.number, va( "print \"Split-screen: no free client slots for Player %i\n\"", player ) );
+		return -1;
+	}
+
+	if ( level.gametype >= GT_TEAM ) {
+		team = owner->client->sess.sessionTeam == TEAM_BLUE ? "blue" : "red";
+	}
+
+	Info_SetValueForKey( userinfo, "rate", "25000" );
+	Info_SetValueForKey( userinfo, "snaps", "20" );
+	Info_SetValueForKey( userinfo, "ip", "localhost" );
+	Info_SetValueForKey( userinfo, "skill", "1.00" );
+	Info_SetValueForKey( userinfo, "handicap", "100" );
+	Info_SetValueForKey( userinfo, "sex", "male" );
+	Info_SetValueForKey( userinfo, "char_color_red", "255" );
+	Info_SetValueForKey( userinfo, "char_color_green", "255" );
+	Info_SetValueForKey( userinfo, "char_color_blue", "255" );
+	Info_SetValueForKey( userinfo, "forcepowers", DEFAULT_FORCEPOWERS );
+	Info_SetValueForKey( userinfo, "cg_predictItems", "1" );
+	Info_SetValueForKey( userinfo, "teamtask", "0" );
+	Info_SetValueForKey( userinfo, "team", team );
+	Info_SetValueForKey( userinfo, "personality", "botfiles/kyle.jkb" );
+	G_ApplySplitScreenProfileToUserinfo( player, userinfo );
+
+	trap->SetUserinfo( clientNum, userinfo );
+
+	bot = &g_entities[clientNum];
+	if ( ClientConnect( clientNum, qtrue, qtrue ) ) {
+		trap->BotFreeClient( clientNum );
+		trap->SendServerCommand( owner->s.number, va( "print \"Split-screen: Player %i failed to connect\n\"", player ) );
+		return -1;
+	}
+
+	if ( level.gametype >= GT_TEAM ) {
+		bot->client->sess.sessionTeam = owner->client->sess.sessionTeam;
+	} else {
+		bot->client->sess.sessionTeam = TEAM_FREE;
+	}
+	bot->client->sess.spectatorState = SPECTATOR_NOT;
+	bot->client->sess.spectatorClient = 0;
+	bot->client->ps.persistant[PERS_TEAM] = bot->client->sess.sessionTeam;
+
+	g_splitScreenLocalClient[clientNum] = qtrue;
+	g_splitScreenClientNums[player] = clientNum;
+
+	ClientBegin( clientNum, qfalse );
+	trap->Cvar_Set( va( "ui_splitScreenP%iJoined", player ), "1" );
+	trap->SendServerCommand( owner->s.number, va( "print \"Split-screen: Player %i joined as client %i\n\"", player, clientNum ) );
+	return clientNum;
+}
+
+static void Cmd_SplitScreenApplyProfile_f( gentity_t *ent ) {
+	int clientNum;
+	int player;
+	char userinfo[MAX_INFO_STRING] = {0};
+
+	if ( !ent || !ent->client || !ent->client->pers.localClient ) {
+		return;
+	}
+
+	player = G_SplitScreenPlayerArg( 1, 2 );
+	clientNum = G_FindSplitScreenClient( player );
+	if ( clientNum == -1 ) {
+		return;
+	}
+
+	trap->GetUserinfo( clientNum, userinfo, sizeof( userinfo ) );
+	G_ApplySplitScreenProfileToUserinfo( player, userinfo );
+	trap->SetUserinfo( clientNum, userinfo );
+	if ( ClientUserinfoChanged( clientNum ) ) {
+		trap->Cvar_Set( va( "ui_splitScreenP%iJoined", player ), "1" );
+		trap->SendServerCommand( ent->s.number, va( "print \"Split-screen: Player %i profile applied\n\"", player ) );
+	}
+}
+
+static const char *G_SplitScreenDefaultTeamCommand( gentity_t *owner ) {
+	if ( level.gametype >= GT_TEAM && owner && owner->client ) {
+		if ( owner->client->sess.sessionTeam == TEAM_RED ) {
+			return "red";
+		}
+		if ( owner->client->sess.sessionTeam == TEAM_BLUE ) {
+			return "blue";
+		}
+		return "auto";
+	}
+
+	return "free";
+}
+
+static void Cmd_SplitScreenJoin_f( gentity_t *ent ) {
+	int clientNum;
+	int player;
+	gentity_t *split;
+
+	if ( !ent || !ent->client || !ent->client->pers.localClient ) {
+		return;
+	}
+
+	player = G_SplitScreenPlayerArg( 1, 2 );
+	clientNum = G_FindSplitScreenClient( player );
+	if ( clientNum == -1 ) {
+		G_CreateSplitScreenClient( ent, player );
+	} else {
+		split = &g_entities[clientNum];
+		SetTeam( split, (char *)G_SplitScreenDefaultTeamCommand( ent ) );
+		trap->Cvar_Set( va( "ui_splitScreenP%iJoined", player ), "1" );
+		trap->SendServerCommand( ent->s.number, va( "print \"Split-screen: Player %i joined\n\"", player ) );
+	}
+}
+
+static void Cmd_SplitScreenSpectate_f( gentity_t *ent ) {
+	int clientNum;
+	int player;
+	gentity_t *split;
+
+	if ( !ent || !ent->client || !ent->client->pers.localClient ) {
+		return;
+	}
+
+	player = G_SplitScreenPlayerArg( 1, 2 );
+	clientNum = G_FindSplitScreenClient( player );
+	if ( clientNum < 0 ) {
+		clientNum = G_CreateSplitScreenClient( ent, player );
+		if ( clientNum < 0 ) {
+			return;
+		}
+	}
+
+	split = &g_entities[clientNum];
+	SetTeam( split, "spectator" );
+	trap->Cvar_Set( va( "ui_splitScreenP%iJoined", player ), "1" );
+	trap->SendServerCommand( ent->s.number, va( "print \"Split-screen: Player %i spectating\n\"", player ) );
+}
+
+static void Cmd_SplitScreenLeave_f( gentity_t *ent ) {
+	int clientNum;
+	int player;
+
+	if ( !ent || !ent->client || !ent->client->pers.localClient ) {
+		return;
+	}
+
+	player = G_SplitScreenPlayerArg( 1, 2 );
+	clientNum = G_FindSplitScreenClient( player );
+	if ( clientNum < 0 ) {
+		trap->Cvar_Set( va( "ui_splitScreenP%iJoined", player ), "0" );
+		trap->SendServerCommand( ent->s.number, va( "print \"Split-screen: Player %i is not joined\n\"", player ) );
+		return;
+	}
+
+	g_splitScreenLocalClient[clientNum] = qfalse;
+	g_splitScreenClientNums[player] = -1;
+	ClientDisconnect( clientNum );
+	trap->BotFreeClient( clientNum );
+	trap->Cvar_Set( va( "ui_splitScreenP%iJoined", player ), "0" );
+	trap->SendServerCommand( ent->s.number, va( "print \"Split-screen: Player %i left\n\"", player ) );
+}
+
+static void Cmd_SplitScreenCmd_f( gentity_t *ent ) {
+	usercmd_t cmd;
+	int clientNum;
+	int player = 2;
+	int argBase = 1;
+	char arg[MAX_TOKEN_CHARS];
+
+	if ( !ent || !ent->client || !ent->client->pers.localClient ) {
+		return;
+	}
+
+	if ( trap->Argc() != 12 && trap->Argc() != 13 ) {
+		return;
+	}
+
+	if ( trap->Argc() == 13 ) {
+		player = G_SplitScreenPlayerArg( 1, 2 );
+		argBase = 2;
+	}
+
+	clientNum = G_FindSplitScreenClient( player );
+	if ( clientNum == -1 ) {
+		return;
+	}
+
+	memset( &cmd, 0, sizeof( cmd ) );
+	trap->Argv( argBase + 0, arg, sizeof( arg ) );
+	cmd.serverTime = atoi( arg );
+	trap->Argv( argBase + 1, arg, sizeof( arg ) );
+	cmd.angles[PITCH] = atoi( arg );
+	trap->Argv( argBase + 2, arg, sizeof( arg ) );
+	cmd.angles[YAW] = atoi( arg );
+	trap->Argv( argBase + 3, arg, sizeof( arg ) );
+	cmd.angles[ROLL] = atoi( arg );
+	trap->Argv( argBase + 4, arg, sizeof( arg ) );
+	cmd.buttons = atoi( arg );
+	trap->Argv( argBase + 5, arg, sizeof( arg ) );
+	cmd.forwardmove = (signed char)atoi( arg );
+	trap->Argv( argBase + 6, arg, sizeof( arg ) );
+	cmd.rightmove = (signed char)atoi( arg );
+	trap->Argv( argBase + 7, arg, sizeof( arg ) );
+	cmd.upmove = (signed char)atoi( arg );
+	trap->Argv( argBase + 8, arg, sizeof( arg ) );
+	cmd.weapon = (byte)atoi( arg );
+	trap->Argv( argBase + 9, arg, sizeof( arg ) );
+	cmd.forcesel = (byte)atoi( arg );
+	trap->Argv( argBase + 10, arg, sizeof( arg ) );
+	cmd.invensel = (byte)atoi( arg );
+
+	trap->BotUserCommand( clientNum, &cmd );
 }
 
 command_t commands[] = {
@@ -3420,6 +3716,11 @@ command_t commands[] = {
 	{ "score",				Cmd_Score_f,				0 },
 	{ "setviewpos",			Cmd_SetViewpos_f,			CMD_CHEAT|CMD_NOINTERMISSION },
 	{ "siegeclass",			Cmd_SiegeClass_f,			CMD_NOINTERMISSION },
+	{ "splitscreen_applyprofile",	Cmd_SplitScreenApplyProfile_f,	0 },
+	{ "splitscreen_cmd",	Cmd_SplitScreenCmd_f,		0 },
+	{ "splitscreen_join",	Cmd_SplitScreenJoin_f,		0 },
+	{ "splitscreen_leave",	Cmd_SplitScreenLeave_f,		0 },
+	{ "splitscreen_spectate",	Cmd_SplitScreenSpectate_f,	0 },
 	{ "team",				Cmd_Team_f,					CMD_NOINTERMISSION },
 //	{ "teamtask",			Cmd_TeamTask_f,				CMD_NOINTERMISSION },
 	{ "teamvote",			Cmd_TeamVote_f,				CMD_NOINTERMISSION },

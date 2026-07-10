@@ -391,6 +391,9 @@ extern uiInfo_t uiInfo;
 qboolean	UI_ConsoleCommand( int realTime );
 void		UI_DrawHandlePic( float x, float y, float w, float h, qhandle_t hShader );
 void		UI_FillRect( float x, float y, float width, float height, const float *color );
+void		UI_SetViewportTransform( qboolean active, float x, float y, float w, float h );
+void		UI_TransformRect( float *x, float *y, float *w, float *h );
+float		UI_TransformScale( float scale );
 char		*UI_Cvar_VariableString( const char *var_name );
 
 

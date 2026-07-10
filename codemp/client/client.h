@@ -504,6 +504,8 @@ void CL_InitInput (void);
 void CL_ShutdownInput(void);
 void CL_SendCmd (void);
 void CL_ClearState (void);
+void CL_SplitScreenSetControllerAxis( int player, int axis, int value );
+void CL_SplitScreenSetControllerButton( int player, int button, qboolean pressed );
 
 void CL_WritePacket( void );
 

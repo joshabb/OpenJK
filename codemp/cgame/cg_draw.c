@@ -154,6 +154,11 @@ void CG_Text_Paint(float x, float y, float scale, vec4_t color, const char *text
 {
 	int iStyleOR = 0;
 	int iFontIndex = MenuFontToHandle(iMenuFont);
+	float w = 0.0f;
+	float h = 0.0f;
+
+	CG_Transform2DRect( &x, &y, &w, &h );
+	scale = CG_Transform2DScale( scale );
 
 	switch (style)
 	{
@@ -8403,6 +8408,21 @@ CG_DrawActive
 Perform all drawing needed to completely fill the screen
 =====================
 */
+void CG_DrawActive2D( void )
+{
+	if ( cl_splitScreen.integer ) {
+		CG_Set2DViewportTransform( qtrue,
+			cg.refdef.x * SCREEN_WIDTH / (float)cgs.glconfig.vidWidth,
+			cg.refdef.y * SCREEN_HEIGHT / (float)cgs.glconfig.vidHeight,
+			cg.refdef.width * SCREEN_WIDTH / (float)cgs.glconfig.vidWidth,
+			cg.refdef.height * SCREEN_HEIGHT / (float)cgs.glconfig.vidHeight );
+		CG_Draw2D();
+		CG_Set2DViewportTransform( qfalse, 0.0f, 0.0f, SCREEN_WIDTH, SCREEN_HEIGHT );
+	} else {
+		CG_Draw2D();
+	}
+}
+
 void CG_DrawActive( stereoFrame_t stereoView ) {
 	float		separation;
 	vec3_t		baseOrg;
@@ -8460,9 +8480,8 @@ void CG_DrawActive( stereoFrame_t stereoView ) {
 		VectorCopy( baseOrg, cg.refdef.vieworg );
 	}
 
-	// draw status bar and other floating elements
- 	CG_Draw2D();
+	if ( !cl_splitScreen.integer ) {
+		CG_DrawActive2D();
+	}
 }
-
-
 

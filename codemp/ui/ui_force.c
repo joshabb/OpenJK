@@ -191,14 +191,23 @@ void UI_DrawForceStars(rectDef_t *rect, float scale, vec4_t color, int textStyle
 // Set the client's force power layout.
 void UI_UpdateClientForcePowers(const char *teamArg)
 {
-	trap->Cvar_Set( "forcepowers", va("%i-%i-%i%i%i%i%i%i%i%i%i%i%i%i%i%i%i%i%i%i",
+	const char *forceString = va("%i-%i-%i%i%i%i%i%i%i%i%i%i%i%i%i%i%i%i%i%i",
 		uiForceRank, uiForceSide, uiForcePowersRank[0], uiForcePowersRank[1],
 		uiForcePowersRank[2], uiForcePowersRank[3], uiForcePowersRank[4],
 		uiForcePowersRank[5], uiForcePowersRank[6], uiForcePowersRank[7],
 		uiForcePowersRank[8], uiForcePowersRank[9], uiForcePowersRank[10],
 		uiForcePowersRank[11], uiForcePowersRank[12], uiForcePowersRank[13],
 		uiForcePowersRank[14], uiForcePowersRank[15], uiForcePowersRank[16],
-		uiForcePowersRank[17]) );
+		uiForcePowersRank[17]);
+
+	if ( trap->Cvar_VariableValue( "ui_splitScreenProfileTarget" ) == 2 ) {
+		trap->Cvar_Set( "ui_splitScreenP2ForcePowers", forceString );
+		trap->Cmd_ExecuteText( EXEC_APPEND, "cmd splitscreen_applyprofile\n" );
+		gTouchedForce = qfalse;
+		return;
+	}
+
+	trap->Cvar_Set( "forcepowers", forceString );
 
 	if (gTouchedForce)
 	{

@@ -117,6 +117,34 @@ void R_AddPolygonSurfaces( void ) {
 	}
 }
 
+static void R_RenderSplitScreenViews( const viewParms_t *baseParms ) {
+	viewParms_t splitParms;
+	const qboolean vertical = ( r_splitScreenLayout->integer != 0 ) ? qtrue : qfalse;
+
+	splitParms = *baseParms;
+
+	if ( vertical ) {
+		splitParms.viewportWidth = baseParms->viewportWidth / 2;
+		R_RenderView( &splitParms );
+
+		splitParms = *baseParms;
+		splitParms.viewportX = baseParms->viewportX + ( baseParms->viewportWidth / 2 );
+		splitParms.viewportWidth = baseParms->viewportWidth - ( baseParms->viewportWidth / 2 );
+		R_RenderView( &splitParms );
+	} else {
+		const int lowerHeight = baseParms->viewportHeight / 2;
+		const int upperHeight = baseParms->viewportHeight - lowerHeight;
+
+		splitParms.viewportY = baseParms->viewportY + lowerHeight;
+		splitParms.viewportHeight = upperHeight;
+		R_RenderView( &splitParms );
+
+		splitParms = *baseParms;
+		splitParms.viewportHeight = lowerHeight;
+		R_RenderView( &splitParms );
+	}
+}
+
 /*
 =====================
 RE_AddPolyToScene
@@ -544,7 +572,11 @@ void RE_RenderScene( const refdef_t *fd ) {
 
 	VectorCopy( fd->vieworg, parms.pvsOrigin );
 
-	R_RenderView( &parms );
+	if ( r_splitScreen->integer ) {
+		R_RenderSplitScreenViews( &parms );
+	} else {
+		R_RenderView( &parms );
+	}
 
 	// the next scene rendered in this frame will tack on after this one
 	r_firstSceneDrawSurf = tr.refdef.numDrawSurfs;

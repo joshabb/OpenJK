@@ -2414,6 +2414,240 @@ extern void CG_ActualLoadDeferredPlayers( void );
 
 static int cg_siegeClassIndex = -2;
 
+static qboolean CG_SplitScreenEnabled( void ) {
+	return ( cl_splitScreen.integer != 0 ) ? qtrue : qfalse;
+}
+
+static int CG_SplitScreenPlayerCount( void ) {
+	char buffer[16];
+	int playerCount;
+
+	trap->Cvar_VariableStringBuffer( "ui_splitScreenPlayerCount", buffer, sizeof( buffer ) );
+	playerCount = atoi( buffer );
+
+	if ( playerCount < 2 ) {
+		playerCount = 2;
+	} else if ( playerCount > 4 ) {
+		playerCount = 4;
+	}
+	return playerCount;
+}
+
+static void CG_ApplySplitScreenRect( int viewIndex ) {
+	const qboolean vertical = ( cl_splitScreenLayout.integer != 0 ) ? qtrue : qfalse;
+	const int playerCount = CG_SplitScreenPlayerCount();
+
+	if ( playerCount > 2 ) {
+		const int halfWidth = cgs.glconfig.vidWidth / 2;
+		const int halfHeight = cgs.glconfig.vidHeight / 2;
+
+		cg.refdef.x = ( viewIndex % 2 ) ? halfWidth : 0;
+		cg.refdef.y = ( viewIndex >= 2 ) ? halfHeight : 0;
+		cg.refdef.width = ( viewIndex % 2 ) ? cgs.glconfig.vidWidth - halfWidth : halfWidth;
+		cg.refdef.height = ( viewIndex >= 2 ) ? cgs.glconfig.vidHeight - halfHeight : halfHeight;
+
+		if ( playerCount == 3 && viewIndex == 2 ) {
+			cg.refdef.x = cgs.glconfig.vidWidth / 4;
+			cg.refdef.width = halfWidth;
+		}
+
+		cg.refdef.width &= ~1;
+		cg.refdef.height &= ~1;
+		return;
+	}
+
+	if ( vertical ) {
+		const int leftWidth = cgs.glconfig.vidWidth / 2;
+
+		cg.refdef.x = viewIndex == 0 ? 0 : leftWidth;
+		cg.refdef.y = 0;
+		cg.refdef.width = viewIndex == 0 ? leftWidth : cgs.glconfig.vidWidth - leftWidth;
+		cg.refdef.height = cgs.glconfig.vidHeight;
+	} else {
+		const int topHeight = cgs.glconfig.vidHeight / 2;
+
+		cg.refdef.x = 0;
+		cg.refdef.y = viewIndex == 0 ? 0 : topHeight;
+		cg.refdef.width = cgs.glconfig.vidWidth;
+		cg.refdef.height = viewIndex == 0 ? topHeight : cgs.glconfig.vidHeight - topHeight;
+	}
+
+	cg.refdef.width &= ~1;
+	cg.refdef.height &= ~1;
+}
+
+static int CG_FindSplitScreenClient( int player ) {
+	int i;
+
+	for ( i = 0; i < MAX_CLIENTS; i++ ) {
+		if ( !cgs.clientinfo[i].infoValid ) {
+			continue;
+		}
+		if ( !Q_stricmp( cgs.clientinfo[i].cleanname, va( "SplitPlayer%i", player ) ) || !Q_stricmp( cgs.clientinfo[i].name, va( "SplitPlayer%i", player ) ) ) {
+			return i;
+		}
+	}
+
+	return -1;
+}
+
+static void CG_SetSplitScreenClientView( int clientNum ) {
+	centity_t *cent = &cg_entities[clientNum];
+	vec3_t forward;
+
+	VectorCopy( cent->lerpOrigin, cg.refdef.vieworg );
+	cg.refdef.vieworg[2] += DEFAULT_VIEWHEIGHT;
+
+	VectorCopy( cent->lerpAngles, cg.refdef.viewangles );
+	AngleVectors( cg.refdef.viewangles, forward, NULL, NULL );
+	VectorMA( cg.refdef.vieworg, 4.0f, forward, cg.refdef.vieworg );
+	AnglesToAxis( cg.refdef.viewangles, cg.refdef.viewaxis );
+	cg.refdef.viewContents = CG_PointContents( cg.refdef.vieworg, -1 );
+}
+
+static void CG_DrawSplitScreenExtraViews( void ) {
+	refdef_t primaryRefdef;
+	int clientNum;
+	int player;
+	int playerCount;
+
+	if ( !CG_SplitScreenEnabled() || !cg.snap ) {
+		return;
+	}
+
+	primaryRefdef = cg.refdef;
+	playerCount = CG_SplitScreenPlayerCount();
+
+	for ( player = 2; player <= playerCount; player++ ) {
+		clientNum = CG_FindSplitScreenClient( player );
+		if ( clientNum < 0 ) {
+			continue;
+		}
+
+		trap->R_ClearScene();
+		cg.refdef = primaryRefdef;
+		CG_ApplySplitScreenRect( player - 1 );
+		CG_SetSplitScreenClientView( clientNum );
+		CG_SetupFrustum();
+
+		if ( cg.snap->ps.fd.forcePowersActive & (1 << FP_SEE) ) {
+			cg.refdef.rdflags |= RDF_ForceSightOn;
+		}
+		cg.refdef.rdflags |= RDF_DRAWSKYBOX;
+
+		if ( !cg.hyperspace ) {
+			CG_AddPacketEntities( qfalse );
+			CG_AddMarks();
+			CG_AddLocalEntities();
+		}
+
+		cg.refdef.time = cg.time;
+		memcpy( cg.refdef.areamask, cg.snap->areamask, sizeof( cg.refdef.areamask ) );
+		trap->R_RenderScene( &cg.refdef );
+	}
+
+	cg.refdef = primaryRefdef;
+}
+
+static void CG_BuildSplitScreenPlayerState( int clientNum, playerState_t *ps ) {
+	centity_t *cent = &cg_entities[clientNum];
+	entityState_t *es = &cent->currentState;
+	int i;
+
+	*ps = cg.snap->ps;
+	ps->clientNum = clientNum;
+	VectorCopy( es->pos.trBase, ps->origin );
+	VectorCopy( es->pos.trDelta, ps->velocity );
+	VectorCopy( es->apos.trBase, ps->viewangles );
+	ps->saberLockFrame = es->forceFrame;
+	ps->legsAnim = es->legsAnim;
+	ps->torsoAnim = es->torsoAnim;
+	ps->legsFlip = es->legsFlip;
+	ps->torsoFlip = es->torsoFlip;
+	ps->saberMove = es->saberMove;
+	ps->eFlags = es->eFlags;
+	ps->eFlags2 = es->eFlags2;
+	ps->weapon = es->weapon ? es->weapon : WP_SABER;
+	ps->weaponstate = es->modelindex2;
+	ps->weaponChargeTime = es->constantLight;
+	ps->groundEntityNum = es->groundEntityNum;
+	ps->saberInFlight = es->saberInFlight;
+	ps->saberEntityNum = es->saberEntityNum;
+	ps->fd.forcePowersActive = es->forcePowersActive;
+	ps->fd.saberAnimLevel = es->fireflag;
+	ps->emplacedIndex = es->otherEntityNum2;
+	ps->saberHolstered = es->saberHolstered;
+	ps->duelInProgress = es->bolt1 ? qtrue : qfalse;
+	ps->isJediMaster = es->isJediMaster;
+	ps->holocronBits = es->time2;
+	ps->heldByClient = es->heldByClient;
+	ps->ragAttach = es->ragAttach;
+	ps->iModelScale = es->iModelScale;
+	ps->brokenLimbs = es->brokenLimbs;
+	ps->hasLookTarget = es->hasLookTarget;
+	ps->lookTarget = es->lookTarget;
+	ps->m_iVehicleNum = es->m_iVehicleNum;
+	for ( i = 0; i < MAX_POWERUPS; i++ ) {
+		ps->powerups[i] = ( es->powerups & ( 1 << i ) ) ? cg.time + 1000 : 0;
+	}
+
+	ps->persistant[PERS_TEAM] = cgs.clientinfo[clientNum].team;
+	ps->stats[STAT_MAX_HEALTH] = 100;
+	ps->stats[STAT_HEALTH] = ( es->eFlags & EF_DEAD ) ? 0 : 100;
+	ps->stats[STAT_ARMOR] = 0;
+	ps->stats[STAT_WEAPONS] = ( ps->weapon > WP_NONE && ps->weapon < 32 ) ? ( 1 << ps->weapon ) : ( 1 << WP_SABER );
+	ps->pm_type = cgs.clientinfo[clientNum].team == TEAM_SPECTATOR ? PM_SPECTATOR : PM_NORMAL;
+}
+
+static void CG_DrawSplitScreen2DViews( void ) {
+	refdef_t primaryRefdef;
+	playerState_t primarySnapPs;
+	playerState_t primaryPredictedPs;
+	int primaryClientNum;
+	int player;
+	int playerCount;
+
+	if ( !CG_SplitScreenEnabled() || !cg.snap ) {
+		return;
+	}
+
+	primaryRefdef = cg.refdef;
+	primarySnapPs = cg.snap->ps;
+	primaryPredictedPs = cg.predictedPlayerState;
+	primaryClientNum = cg.clientNum;
+	playerCount = CG_SplitScreenPlayerCount();
+
+	for ( player = 1; player <= playerCount; player++ ) {
+		int clientNum = player == 1 ? primarySnapPs.clientNum : CG_FindSplitScreenClient( player );
+		playerState_t splitPs;
+
+		if ( clientNum < 0 || clientNum >= MAX_CLIENTS ) {
+			continue;
+		}
+
+		cg.refdef = primaryRefdef;
+		CG_ApplySplitScreenRect( player - 1 );
+
+		if ( player == 1 ) {
+			cg.snap->ps = primarySnapPs;
+			cg.predictedPlayerState = primaryPredictedPs;
+			cg.clientNum = primaryClientNum;
+		} else {
+			CG_BuildSplitScreenPlayerState( clientNum, &splitPs );
+			cg.snap->ps = splitPs;
+			cg.predictedPlayerState = splitPs;
+			cg.clientNum = clientNum;
+		}
+
+		CG_DrawActive2D();
+	}
+
+	cg.refdef = primaryRefdef;
+	cg.snap->ps = primarySnapPs;
+	cg.predictedPlayerState = primaryPredictedPs;
+	cg.clientNum = primaryClientNum;
+}
+
 void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demoPlayback ) {
 	int		inwater;
 	const char *cstr;
@@ -2612,6 +2846,9 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 
 	// build cg.refdef
 	inwater = CG_CalcViewValues();
+	if ( CG_SplitScreenEnabled() ) {
+		CG_ApplySplitScreenRect( 0 );
+	}
 	CG_SetupFrustum();
 
 	if (cg_linearFogOverride)
@@ -2726,7 +2963,16 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 	}
 
 	// actually issue the rendering calls
+	if ( CG_SplitScreenEnabled() ) {
+		trap->R_SetColor( colorBlack );
+		trap->R_DrawStretchPic( 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, 0, cgs.media.whiteShader );
+		trap->R_SetColor( NULL );
+	}
 	CG_DrawActive( stereoView );
+	CG_DrawSplitScreenExtraViews();
+	if ( CG_SplitScreenEnabled() ) {
+		CG_DrawSplitScreen2DViews();
+	}
 
 	CG_DrawAutoMap();
 
@@ -2734,4 +2980,3 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 		trap->Print( "cg.clientFrame:%i\n", cg.clientFrame );
 	}
 }
-

@@ -5332,6 +5332,9 @@ void Item_Model_Paint(itemDef_t *item)
 	y = item->window.rect.y+1;
 	w = item->window.rect.w-2;
 	h = item->window.rect.h-2;
+#ifndef _CGAME
+	UI_TransformRect( &x, &y, &w, &h );
+#endif
 
 	refdef.x = x * DC->xscale;
 	refdef.y = y * DC->yscale;

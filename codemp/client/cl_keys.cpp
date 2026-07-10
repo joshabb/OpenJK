@@ -1193,6 +1193,7 @@ void CL_InitKeyCommands( void ) {
 	Cmd_SetCommandCompletionFunc( "unbind", Key_CompleteUnbind );
 	Cmd_AddCommand( "unbindall", Key_Unbindall_f, "Delete all key bindings" );
 	Cmd_AddCommand( "bindlist", Key_Bindlist_f, "Show all bindings in the console" );
+	Cmd_AddCommand( "splitscreen_menu", [](){ UIVM_SetActiveMenu( UIMENU_SPLITSCREEN ); }, "Open the local split-screen player setup menu" );
 }
 
 /*
@@ -1365,6 +1366,10 @@ void CL_KeyDownEvent( int key, unsigned time )
 		return;
 	}
 
+	if ( Cvar_VariableIntegerValue( "cl_splitScreen" ) && key >= A_JOY0 && key <= A_JOY31 ) {
+		return;
+	}
+
 	// send the bound action
 	if ( !cls.cursorActive ) CL_ParseBinding( key, qtrue, time );
 
@@ -1414,6 +1419,10 @@ void CL_KeyUpEvent( int key, unsigned time )
 	// don't process key-up events for the console key
 	if ( key == A_CONSOLE || ( key == A_ESCAPE && kg.keys[A_SHIFT].down ) )
 		return;
+
+	if ( Cvar_VariableIntegerValue( "cl_splitScreen" ) && key >= A_JOY0 && key <= A_JOY31 ) {
+		return;
+	}
 
 	//
 	// key up events only perform actions if the game key binding is

@@ -27,7 +27,10 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 
 static cvar_t *in_keyboardDebug     = NULL;
 
+#define MAX_SPLITSCREEN_JOYSTICKS 4
+
 static SDL_Joystick *stick = NULL;
+static SDL_Joystick *splitSticks[MAX_SPLITSCREEN_JOYSTICKS];
 
 static qboolean mouseAvailable = qfalse;
 static qboolean mouseActive = qfalse;
@@ -532,7 +535,236 @@ struct stick_state_s
 	unsigned int oldaxes;
 	int oldaaxes[MAX_JOYSTICK_AXIS];
 	unsigned int oldhats;
-} stick_state;
+} stick_state[MAX_SPLITSCREEN_JOYSTICKS];
+
+static int IN_SplitScreenInputJoystickIndex( int player )
+{
+	char inputName[32];
+
+	Cvar_VariableStringBuffer( va( "ui_splitScreenP%iInput", player ), inputName, sizeof( inputName ) );
+	if ( !Q_stricmp( inputName, "controller1" ) ) {
+		return 0;
+	}
+	if ( !Q_stricmp( inputName, "controller2" ) ) {
+		return 1;
+	}
+	if ( !Q_stricmp( inputName, "controller3" ) ) {
+		return 2;
+	}
+	return -1;
+}
+
+static int IN_SplitScreenPlayerForJoystickSlot( int joystickSlot )
+{
+	int player;
+	int playerCount = Cvar_VariableIntegerValue( "ui_splitScreenPlayerCount" );
+
+	if ( playerCount < 2 ) {
+		playerCount = 2;
+	} else if ( playerCount > 4 ) {
+		playerCount = 4;
+	}
+
+	for ( player = 2; player <= playerCount; player++ ) {
+		if ( IN_SplitScreenInputJoystickIndex( player ) == joystickSlot ) {
+			return player;
+		}
+	}
+	return -1;
+}
+
+static qboolean IN_SplitScreenLegacyJoystickFeedsPlayerOne( void )
+{
+	if ( !Cvar_VariableIntegerValue( "cl_splitScreen" ) ) {
+		return qtrue;
+	}
+	if ( !in_joystickNo ) {
+		return qfalse;
+	}
+	return (qboolean)( IN_SplitScreenInputJoystickIndex( 1 ) == in_joystickNo->integer );
+}
+
+static void IN_QueueSplitScreenUIKey( int player, int key, qboolean down )
+{
+	if ( !( Key_GetCatcher() & KEYCATCH_UI ) ) {
+		return;
+	}
+
+	Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
+	Sys_QueEvent( 0, SE_KEY, key, down, 0, NULL );
+}
+
+static void IN_UpdateSplitScreenControllerUIEvents( int player, int slot, SDL_Joystick *controller )
+{
+	int i;
+	int total;
+	int axes = 0;
+	unsigned int hats = 0;
+	stick_state_s *state;
+
+	if ( !( Key_GetCatcher() & KEYCATCH_UI ) ) {
+		return;
+	}
+	if ( slot + 1 >= MAX_SPLITSCREEN_JOYSTICKS ) {
+		return;
+	}
+
+	state = &stick_state[slot + 1];
+
+	total = SDL_JoystickNumButtons( controller );
+	if ( total > (int)ARRAY_LEN( state->buttons ) ) {
+		total = ARRAY_LEN( state->buttons );
+	}
+
+	for ( i = 0; i < total; i++ ) {
+		qboolean pressed = (qboolean)( SDL_JoystickGetButton( controller, i ) != 0 );
+		if ( pressed == state->buttons[i] ) {
+			continue;
+		}
+
+		switch ( i ) {
+		case 0:
+			IN_QueueSplitScreenUIKey( player, A_ENTER, pressed );
+			break;
+		case 1:
+			IN_QueueSplitScreenUIKey( player, A_BACKSPACE, pressed );
+			break;
+		case 2:
+			if ( pressed ) {
+				Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
+				Cvar_Set( "ui_splitScreenKeyboardOpen", va( "%i", player ) );
+			}
+			break;
+		case 3:
+			IN_QueueSplitScreenUIKey( player, A_ESCAPE, pressed );
+			break;
+		case 7:
+			IN_QueueSplitScreenUIKey( player, A_ENTER, pressed );
+			break;
+		default:
+			break;
+		}
+
+		state->buttons[i] = pressed;
+	}
+
+	total = SDL_JoystickNumHats( controller );
+	if ( total > 0 ) {
+		if ( total > 4 ) {
+			total = 4;
+		}
+		for ( i = 0; i < total; i++ ) {
+			( (Uint8 *)&hats )[i] = SDL_JoystickGetHat( controller, i );
+		}
+	}
+
+	if ( hats != state->oldhats ) {
+		if ( hats & SDL_HAT_UP ) {
+			IN_QueueSplitScreenUIKey( player, A_CURSOR_UP, qtrue );
+			IN_QueueSplitScreenUIKey( player, A_CURSOR_UP, qfalse );
+		}
+		if ( hats & SDL_HAT_RIGHT ) {
+			IN_QueueSplitScreenUIKey( player, A_CURSOR_RIGHT, qtrue );
+			IN_QueueSplitScreenUIKey( player, A_CURSOR_RIGHT, qfalse );
+		}
+		if ( hats & SDL_HAT_DOWN ) {
+			IN_QueueSplitScreenUIKey( player, A_CURSOR_DOWN, qtrue );
+			IN_QueueSplitScreenUIKey( player, A_CURSOR_DOWN, qfalse );
+		}
+		if ( hats & SDL_HAT_LEFT ) {
+			IN_QueueSplitScreenUIKey( player, A_CURSOR_LEFT, qtrue );
+			IN_QueueSplitScreenUIKey( player, A_CURSOR_LEFT, qfalse );
+		}
+		state->oldhats = hats;
+	}
+
+	total = SDL_JoystickNumAxes( controller );
+	if ( total > 2 ) {
+		total = 2;
+	}
+	for ( i = 0; i < total; i++ ) {
+		Sint16 axis = SDL_JoystickGetAxis( controller, i );
+		float f = ( (float) axis ) / 32767.0f;
+		if ( f < -in_joystickThreshold->value ) {
+			axes |= ( 1 << ( i * 2 ) );
+		} else if ( f > in_joystickThreshold->value ) {
+			axes |= ( 1 << ( ( i * 2 ) + 1 ) );
+		}
+	}
+
+	if ( axes != state->oldaxes ) {
+		for ( i = 0; i < 4; i++ ) {
+			if ( ( axes & ( 1 << i ) ) && !( state->oldaxes & ( 1 << i ) ) ) {
+				IN_QueueSplitScreenUIKey( player, joy_keys[i], qtrue );
+				IN_QueueSplitScreenUIKey( player, joy_keys[i], qfalse );
+			}
+		}
+		state->oldaxes = axes;
+	}
+}
+
+static void IN_UpdateSplitScreenControllerState( void )
+{
+	int slot;
+	int player;
+	int total;
+	int i;
+
+	if ( !Cvar_VariableIntegerValue( "cl_splitScreen" ) ) {
+		return;
+	}
+
+	for ( player = 2; player <= 4; player++ )
+	{
+		for ( i = 0; i < MAX_JOYSTICK_AXIS; i++ )
+		{
+			CL_SplitScreenSetControllerAxis( player, i, 0 );
+		}
+		for ( i = 0; i < 16; i++ )
+		{
+			CL_SplitScreenSetControllerButton( player, i, qfalse );
+		}
+	}
+
+	for ( slot = 0; slot < 3 && slot < MAX_SPLITSCREEN_JOYSTICKS; slot++ )
+	{
+		SDL_Joystick *controller = splitSticks[slot];
+		if ( !controller ) {
+			continue;
+		}
+
+		player = IN_SplitScreenPlayerForJoystickSlot( slot );
+		if ( player < 2 || player > 4 ) {
+			continue;
+		}
+
+		total = SDL_JoystickNumAxes( controller );
+		if ( total > MAX_JOYSTICK_AXIS ) {
+			total = MAX_JOYSTICK_AXIS;
+		}
+		for ( i = 0; i < total; i++ )
+		{
+			Sint16 axis = SDL_JoystickGetAxis( controller, i );
+			float f = ( (float) abs( axis ) ) / 32767.0f;
+
+			if ( f < in_joystickThreshold->value ) {
+				axis = 0;
+			}
+			CL_SplitScreenSetControllerAxis( player, i, axis );
+		}
+
+		total = SDL_JoystickNumButtons( controller );
+		if ( total > 16 ) {
+			total = 16;
+		}
+		for ( i = 0; i < total; i++ )
+		{
+			CL_SplitScreenSetControllerButton( player, i, (qboolean)( SDL_JoystickGetButton( controller, i ) != 0 ) );
+		}
+
+		IN_UpdateSplitScreenControllerUIEvents( player, slot, controller );
+	}
+}
 
 /*
 ===============
@@ -546,9 +778,26 @@ static void IN_InitJoystick( void )
 	char buf[16384] = "";
 
 	if (stick != NULL)
+	{
 		SDL_JoystickClose(stick);
+		for (i = 0; i < MAX_SPLITSCREEN_JOYSTICKS; i++)
+		{
+			if (splitSticks[i] == stick)
+			{
+				splitSticks[i] = NULL;
+			}
+		}
+		stick = NULL;
+	}
+	for (i = 0; i < MAX_SPLITSCREEN_JOYSTICKS; i++)
+	{
+		if (splitSticks[i] != NULL)
+		{
+			SDL_JoystickClose(splitSticks[i]);
+			splitSticks[i] = NULL;
+		}
+	}
 
-	stick = NULL;
 	memset(&stick_state, '\0', sizeof (stick_state));
 
 	if (!SDL_WasInit(SDL_INIT_JOYSTICK))
@@ -589,6 +838,14 @@ static void IN_InitJoystick( void )
 	in_joystickThreshold = Cvar_Get( "joy_threshold", "0.15", CVAR_ARCHIVE_ND );
 
 	stick = SDL_JoystickOpen( in_joystickNo->integer );
+	for (i = 0; i < MAX_SPLITSCREEN_JOYSTICKS && i < total; i++)
+	{
+		if ( i == in_joystickNo->integer ) {
+			splitSticks[i] = stick;
+		} else {
+			splitSticks[i] = SDL_JoystickOpen( i );
+		}
+	}
 
 	if (stick == NULL) {
 		Com_DPrintf( "No joystick opened.\n" );
@@ -601,6 +858,13 @@ static void IN_InitJoystick( void )
 	Com_DPrintf( "Hats:       %d\n", SDL_JoystickNumHats(stick) );
 	Com_DPrintf( "Buttons:    %d\n", SDL_JoystickNumButtons(stick) );
 	Com_DPrintf( "Balls:      %d\n", SDL_JoystickNumBalls(stick) );
+	for (i = 1; i < MAX_SPLITSCREEN_JOYSTICKS; i++)
+	{
+		if (splitSticks[i])
+		{
+			Com_DPrintf( "Split-screen joystick slot %d opened: %s\n", i + 1, SDL_JoystickNameForIndex(i) );
+		}
+	}
 	Com_DPrintf( "Use Analog: %s\n", in_joystickUseAnalog->integer ? "Yes" : "No" );
 	Com_DPrintf( "Threshold: %f\n", in_joystickThreshold->value );
 
@@ -956,11 +1220,17 @@ static void IN_JoyMove( void )
 	unsigned int hats = 0;
 	int total = 0;
 	int i = 0;
+	const qboolean splitScreen = Cvar_VariableIntegerValue( "cl_splitScreen" ) ? qtrue : qfalse;
+	const qboolean legacyJoystickFeedsPlayerOne = IN_SplitScreenLegacyJoystickFeedsPlayerOne();
 
 	if (!stick)
 		return;
 
 	SDL_JoystickUpdate();
+	IN_UpdateSplitScreenControllerState();
+	if ( !legacyJoystickFeedsPlayerOne ) {
+		return;
+	}
 
 	// update the ball state.
 	total = SDL_JoystickNumBalls(stick);
@@ -992,15 +1262,15 @@ static void IN_JoyMove( void )
 	total = SDL_JoystickNumButtons(stick);
 	if (total > 0)
 	{
-		if (total > (int)ARRAY_LEN(stick_state.buttons))
-			total = ARRAY_LEN(stick_state.buttons);
+		if (total > (int)ARRAY_LEN(stick_state[0].buttons))
+			total = ARRAY_LEN(stick_state[0].buttons);
 		for (i = 0; i < total; i++)
 		{
 			qboolean pressed = (qboolean)(SDL_JoystickGetButton(stick, i) != 0);
-			if (pressed != stick_state.buttons[i])
+			if (pressed != stick_state[0].buttons[i])
 			{
 				Sys_QueEvent( 0, SE_KEY, A_JOY1 + i, pressed, 0, NULL );
-				stick_state.buttons[i] = pressed;
+				stick_state[0].buttons[i] = pressed;
 			}
 		}
 	}
@@ -1017,12 +1287,12 @@ static void IN_JoyMove( void )
 	}
 
 	// update hat state
-	if (hats != stick_state.oldhats)
+	if (hats != stick_state[0].oldhats)
 	{
 		for( i = 0; i < 4; i++ ) {
-			if( ((Uint8 *)&hats)[i] != ((Uint8 *)&stick_state.oldhats)[i] ) {
+			if( ((Uint8 *)&hats)[i] != ((Uint8 *)&stick_state[0].oldhats)[i] ) {
 				// release event
-				switch( ((Uint8 *)&stick_state.oldhats)[i] ) {
+				switch( ((Uint8 *)&stick_state[0].oldhats)[i] ) {
 					case SDL_HAT_UP:
 						Sys_QueEvent( 0, SE_KEY, hat_keys[4*i + 0], qfalse, 0, NULL );
 						break;
@@ -1092,13 +1362,13 @@ static void IN_JoyMove( void )
 	}
 
 	// save hat state
-	stick_state.oldhats = hats;
+	stick_state[0].oldhats = hats;
 
 	// finally, look at the axes...
 	total = SDL_JoystickNumAxes(stick);
 	if (total > 0)
 	{
-		if (in_joystickUseAnalog->integer)
+		if (in_joystickUseAnalog->integer || splitScreen)
 		{
 			if (total > MAX_JOYSTICK_AXIS) total = MAX_JOYSTICK_AXIS;
 			for (i = 0; i < total; i++)
@@ -1108,10 +1378,10 @@ static void IN_JoyMove( void )
 
 				if( f < in_joystickThreshold->value ) axis = 0;
 
-				if ( axis != stick_state.oldaaxes[i] )
+				if ( axis != stick_state[0].oldaaxes[i] )
 				{
 					Sys_QueEvent( 0, SE_JOYSTICK_AXIS, i, axis, 0, NULL );
-					stick_state.oldaaxes[i] = axis;
+					stick_state[0].oldaaxes[i] = axis;
 				}
 			}
 		}
@@ -1132,21 +1402,21 @@ static void IN_JoyMove( void )
 	}
 
 	/* Time to update axes state based on old vs. new. */
-	if (axes != stick_state.oldaxes)
+	if (axes != stick_state[0].oldaxes)
 	{
 		for( i = 0; i < 16; i++ ) {
-			if( ( axes & ( 1 << i ) ) && !( stick_state.oldaxes & ( 1 << i ) ) ) {
+			if( ( axes & ( 1 << i ) ) && !( stick_state[0].oldaxes & ( 1 << i ) ) ) {
 				Sys_QueEvent( 0, SE_KEY, joy_keys[i], qtrue, 0, NULL );
 			}
 
-			if( !( axes & ( 1 << i ) ) && ( stick_state.oldaxes & ( 1 << i ) ) ) {
+			if( !( axes & ( 1 << i ) ) && ( stick_state[0].oldaxes & ( 1 << i ) ) ) {
 				Sys_QueEvent( 0, SE_KEY, joy_keys[i], qfalse, 0, NULL );
 			}
 		}
 	}
 
 	/* Save for future generations. */
-	stick_state.oldaxes = axes;
+	stick_state[0].oldaxes = axes;
 }
 
 
@@ -1192,7 +1462,22 @@ static void IN_ShutdownJoystick( void )
 	if (stick)
 	{
 		SDL_JoystickClose(stick);
+		for (int i = 0; i < MAX_SPLITSCREEN_JOYSTICKS; i++)
+		{
+			if (splitSticks[i] == stick)
+			{
+				splitSticks[i] = NULL;
+			}
+		}
 		stick = NULL;
+	}
+	for (int i = 0; i < MAX_SPLITSCREEN_JOYSTICKS; i++)
+	{
+		if (splitSticks[i])
+		{
+			SDL_JoystickClose(splitSticks[i]);
+			splitSticks[i] = NULL;
+		}
 	}
 
 	SDL_QuitSubSystem(SDL_INIT_JOYSTICK);

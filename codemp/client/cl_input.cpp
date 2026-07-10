@@ -37,6 +37,19 @@ float cl_mYawOverride = 0.0f;
 float cl_mSensitivityOverride = 0.0f;
 qboolean cl_bUseFighterPitch = qfalse;
 qboolean cl_crazyShipControls = qfalse;
+cvar_t	*cl_splitScreen = NULL;
+static cvar_t	*cl_splitScreenInvert[5] = { NULL, NULL, NULL, NULL, NULL };
+static cvar_t	*cl_splitScreenSensitivity[5] = { NULL, NULL, NULL, NULL, NULL };
+static cvar_t	*cl_splitScreenCmdHz[5] = { NULL, NULL, NULL, NULL, NULL };
+static cvar_t	*cl_splitScreenMoveSideAxis[5] = { NULL, NULL, NULL, NULL, NULL };
+static cvar_t	*cl_splitScreenMoveForwardAxis[5] = { NULL, NULL, NULL, NULL, NULL };
+static cvar_t	*cl_splitScreenLookYawAxis[5] = { NULL, NULL, NULL, NULL, NULL };
+static cvar_t	*cl_splitScreenLookPitchAxis[5] = { NULL, NULL, NULL, NULL, NULL };
+static vec3_t cl_splitScreenViewangles[5];
+static qboolean cl_splitScreenViewInitialized[5] = { qfalse, qfalse, qfalse, qfalse, qfalse };
+static int cl_splitScreenNextCmdTime[5] = { 0, 0, 0, 0, 0 };
+static int cl_splitScreenControllerAxis[5][MAX_JOYSTICK_AXIS];
+static qboolean cl_splitScreenControllerButtons[5][16];
 
 #ifdef VEH_CONTROL_SCHEME_4
 #define	OVERRIDE_MOUSE_SENSITIVITY 5.0f//20.0f = 180 degree turn in one mouse swipe across keyboard
@@ -960,6 +973,20 @@ void CL_JoystickEvent( int axis, int value, int time ) {
 	cl.joystickAxis[axis] = value;
 }
 
+void CL_SplitScreenSetControllerAxis( int player, int axis, int value ) {
+	if ( player < 2 || player > 4 || axis < 0 || axis >= MAX_JOYSTICK_AXIS ) {
+		return;
+	}
+	cl_splitScreenControllerAxis[player][axis] = value;
+}
+
+void CL_SplitScreenSetControllerButton( int player, int button, qboolean pressed ) {
+	if ( player < 2 || player > 4 || button < 0 || button >= (int)ARRAY_LEN( cl_splitScreenControllerButtons[player] ) ) {
+		return;
+	}
+	cl_splitScreenControllerButtons[player][button] = pressed;
+}
+
 /*
 =================
 CL_JoystickMove
@@ -1028,6 +1055,134 @@ void CL_JoystickMove( usercmd_t *cmd ) {
 	}
 
 	cmd->upmove = ClampChar( cmd->upmove + cl.joystickAxis[AXIS_UP] );
+}
+
+static int CL_SplitScreenAxisValue( int player, const cvar_t *axisCvar ) {
+	const int axis = axisCvar->integer;
+
+	if ( axis < 0 || axis >= MAX_JOYSTICK_AXIS ) {
+		return 0;
+	}
+
+	return cl_splitScreenControllerAxis[player][axis];
+}
+
+static qboolean CL_SplitScreenButtonDown( int player, int offset ) {
+	if ( offset >= 0 && offset < (int)ARRAY_LEN( cl_splitScreenControllerButtons[player] ) ) {
+		return cl_splitScreenControllerButtons[player][offset];
+	}
+	return qfalse;
+}
+
+static qboolean CL_SplitScreenP1UsesJoystick( void ) {
+	char inputName[32];
+
+	if ( !cl_splitScreen->integer ) {
+		return qfalse;
+	}
+
+	Cvar_VariableStringBuffer( "ui_splitScreenP1Input", inputName, sizeof( inputName ) );
+	return (qboolean)!Q_stricmp( inputName, "controller1" );
+}
+
+static void CL_SplitScreenCreateCmd( int player, usercmd_t *cmd ) {
+	float anglespeed;
+	const int moveSide = CL_SplitScreenAxisValue( player, cl_splitScreenMoveSideAxis[player] );
+	const int moveForward = CL_SplitScreenAxisValue( player, cl_splitScreenMoveForwardAxis[player] );
+	const int lookYaw = CL_SplitScreenAxisValue( player, cl_splitScreenLookYawAxis[player] );
+	const int lookPitch = CL_SplitScreenAxisValue( player, cl_splitScreenLookPitchAxis[player] );
+
+	Com_Memset( cmd, 0, sizeof( *cmd ) );
+
+	if ( !in_joystick->integer ) {
+		return;
+	}
+
+	if ( !cl_splitScreenViewInitialized[player] ) {
+		VectorCopy( cl.viewangles, cl_splitScreenViewangles[player] );
+		cl_splitScreenViewInitialized[player] = qtrue;
+	}
+
+	anglespeed = 0.001f * cls.frametime * cl_splitScreenSensitivity[player]->value;
+	cl_splitScreenViewangles[player][YAW] += anglespeed * lookYaw;
+	cl_splitScreenViewangles[player][PITCH] += anglespeed * lookPitch * ( cl_splitScreenInvert[player]->integer ? -1.0f : 1.0f );
+	cl_splitScreenViewangles[player][PITCH] = Com_Clamp( -89.0f, 89.0f, cl_splitScreenViewangles[player][PITCH] );
+
+	cmd->serverTime = cl.serverTime;
+	cmd->angles[PITCH] = ANGLE2SHORT( cl_splitScreenViewangles[player][PITCH] );
+	cmd->angles[YAW] = ANGLE2SHORT( cl_splitScreenViewangles[player][YAW] );
+	cmd->angles[ROLL] = 0;
+	cmd->forwardmove = ClampChar( moveForward );
+	cmd->rightmove = ClampChar( moveSide );
+	cmd->upmove = 0;
+	cmd->weapon = cl.cgameUserCmdValue;
+	cmd->forcesel = cl.cgameForceSelection;
+	cmd->invensel = cl.cgameInvenSelection;
+
+	if ( CL_SplitScreenButtonDown( player, 0 ) ) {
+		cmd->buttons |= BUTTON_ATTACK;
+	}
+	if ( CL_SplitScreenButtonDown( player, 1 ) ) {
+		cmd->buttons |= BUTTON_ALT_ATTACK;
+	}
+	if ( CL_SplitScreenButtonDown( player, 2 ) ) {
+		cmd->buttons |= BUTTON_USE;
+	}
+	if ( CL_SplitScreenButtonDown( player, 3 ) ) {
+		cmd->upmove = 127;
+	}
+}
+
+static void CL_SplitScreenSendPlayerCmd( int player ) {
+	usercmd_t cmd;
+	int hz;
+	int interval;
+
+	if ( !cl_splitScreen->integer || !in_joystick->integer || cls.state != CA_ACTIVE ) {
+		return;
+	}
+
+	hz = (int)Com_Clamp( 1.0f, 125.0f, cl_splitScreenCmdHz[player]->value );
+	interval = 1000 / hz;
+	if ( cls.realtime < cl_splitScreenNextCmdTime[player] ) {
+		return;
+	}
+	cl_splitScreenNextCmdTime[player] = cls.realtime + interval;
+
+	CL_SplitScreenCreateCmd( player, &cmd );
+	CL_AddReliableCommand( va( "splitscreen_cmd %i %i %i %i %i %i %i %i %i %i %i %i",
+		player,
+		cmd.serverTime,
+		cmd.angles[PITCH],
+		cmd.angles[YAW],
+		cmd.angles[ROLL],
+		cmd.buttons,
+		cmd.forwardmove,
+		cmd.rightmove,
+		cmd.upmove,
+		cmd.weapon,
+		cmd.forcesel,
+		cmd.invensel ), qfalse );
+}
+
+static void CL_SplitScreenSendP2Cmd( void ) {
+	int player;
+	int playerCount;
+
+	if ( !cl_splitScreen->integer || !in_joystick->integer || cls.state != CA_ACTIVE ) {
+		return;
+	}
+
+	playerCount = Cvar_VariableIntegerValue( "ui_splitScreenPlayerCount" );
+	if ( playerCount < 2 ) {
+		playerCount = 2;
+	} else if ( playerCount > 4 ) {
+		playerCount = 4;
+	}
+
+	for ( player = 2; player <= playerCount; player++ ) {
+		CL_SplitScreenSendPlayerCmd( player );
+	}
 }
 
 /*
@@ -1350,7 +1505,9 @@ usercmd_t CL_CreateCmd( void ) {
 	CL_MouseMove( &cmd );
 
 	// get basic movement from joystick
-	CL_JoystickMove( &cmd );
+	if ( !cl_splitScreen->integer || CL_SplitScreenP1UsesJoystick() ) {
+		CL_JoystickMove( &cmd );
+	}
 
 	// check to make sure the angles haven't wrapped
 	if ( cl.viewangles[PITCH] - oldAngles[PITCH] > 90 ) {
@@ -1408,6 +1565,7 @@ void CL_CreateNewCommands( void ) {
 	cl.cmdNumber++;
 	cmdNum = cl.cmdNumber & CMD_MASK;
 	cl.cmds[cmdNum] = CL_CreateCmd();
+	CL_SplitScreenSendP2Cmd();
 }
 
 /*
@@ -1761,10 +1919,70 @@ CL_InitInput
 ============
 */
 void CL_InitInput( void ) {
+	int splitPlayer;
+
 	Cmd_AddCommandList( inputCmds );
 
 	cl_nodelta = Cvar_Get ("cl_nodelta", "0", 0);
 	cl_debugMove = Cvar_Get ("cl_debugMove", "0", 0);
+	cl_splitScreen = Cvar_Get( "cl_splitScreen", "0", CVAR_ARCHIVE_ND, "Enable local split-screen command generation." );
+	for ( splitPlayer = 2; splitPlayer <= 4; splitPlayer++ ) {
+		cl_splitScreenInvert[splitPlayer] = Cvar_Get( va( "cl_splitScreenP%iInvert", splitPlayer ), "0", CVAR_ARCHIVE_ND, va( "Invert Player %i controller pitch.", splitPlayer ) );
+		cl_splitScreenSensitivity[splitPlayer] = Cvar_Get( va( "cl_splitScreenP%iSensitivity", splitPlayer ), "140", CVAR_ARCHIVE_ND, va( "Player %i controller look sensitivity.", splitPlayer ) );
+		cl_splitScreenCmdHz[splitPlayer] = Cvar_Get( va( "cl_splitScreenP%iCmdHz", splitPlayer ), "30", CVAR_ARCHIVE_ND, va( "Player %i split-screen command rate.", splitPlayer ) );
+		cl_splitScreenMoveSideAxis[splitPlayer] = Cvar_Get( va( "cl_splitScreenP%iMoveSideAxis", splitPlayer ), "0", CVAR_ARCHIVE_ND, va( "Player %i controller left/right movement axis.", splitPlayer ) );
+		cl_splitScreenMoveForwardAxis[splitPlayer] = Cvar_Get( va( "cl_splitScreenP%iMoveForwardAxis", splitPlayer ), "1", CVAR_ARCHIVE_ND, va( "Player %i controller forward/back movement axis.", splitPlayer ) );
+		cl_splitScreenLookYawAxis[splitPlayer] = Cvar_Get( va( "cl_splitScreenP%iLookYawAxis", splitPlayer ), "2", CVAR_ARCHIVE_ND, va( "Player %i controller look yaw axis.", splitPlayer ) );
+		cl_splitScreenLookPitchAxis[splitPlayer] = Cvar_Get( va( "cl_splitScreenP%iLookPitchAxis", splitPlayer ), "3", CVAR_ARCHIVE_ND, va( "Player %i controller look pitch axis.", splitPlayer ) );
+	}
+	Cvar_Get( "ui_splitScreenP1Name", "Padawan", CVAR_ARCHIVE_ND, "Split-screen Player 1 display name." );
+	Cvar_Get( "ui_splitScreenP1Model", DEFAULT_MODEL"/default", CVAR_ARCHIVE_ND, "Split-screen Player 1 model/skin." );
+	Cvar_Get( "ui_splitScreenP1Saber1", DEFAULT_SABER, CVAR_ARCHIVE_ND, "Split-screen Player 1 primary saber." );
+	Cvar_Get( "ui_splitScreenP1Saber2", "none", CVAR_ARCHIVE_ND, "Split-screen Player 1 secondary saber." );
+	Cvar_Get( "ui_splitScreenP1Color1", "4", CVAR_ARCHIVE_ND, "Split-screen Player 1 saber color 1." );
+	Cvar_Get( "ui_splitScreenP1Color2", "3", CVAR_ARCHIVE_ND, "Split-screen Player 1 saber color 2." );
+	Cvar_Get( "ui_splitScreenP2Name", "SplitPlayer2", CVAR_ARCHIVE_ND, "Split-screen Player 2 display name." );
+	Cvar_Get( "ui_splitScreenP2Model", DEFAULT_MODEL"/default", CVAR_ARCHIVE_ND, "Split-screen Player 2 model/skin." );
+	Cvar_Get( "ui_splitScreenP2Saber1", DEFAULT_SABER, CVAR_ARCHIVE_ND, "Split-screen Player 2 primary saber." );
+	Cvar_Get( "ui_splitScreenP2Saber2", "none", CVAR_ARCHIVE_ND, "Split-screen Player 2 secondary saber." );
+	Cvar_Get( "ui_splitScreenP2Color1", "4", CVAR_ARCHIVE_ND, "Split-screen Player 2 saber color 1." );
+	Cvar_Get( "ui_splitScreenP2Color2", "3", CVAR_ARCHIVE_ND, "Split-screen Player 2 saber color 2." );
+	Cvar_Get( "ui_splitScreenP2CharRed", "255", CVAR_ARCHIVE_ND, "Split-screen Player 2 custom character red channel." );
+	Cvar_Get( "ui_splitScreenP2CharGreen", "255", CVAR_ARCHIVE_ND, "Split-screen Player 2 custom character green channel." );
+	Cvar_Get( "ui_splitScreenP2CharBlue", "255", CVAR_ARCHIVE_ND, "Split-screen Player 2 custom character blue channel." );
+	Cvar_Get( "ui_splitScreenP2ForcePowers", DEFAULT_FORCEPOWERS, CVAR_ARCHIVE_ND, "Split-screen Player 2 force power loadout." );
+	Cvar_Get( "ui_splitScreenP3Name", "SplitPlayer3", CVAR_ARCHIVE_ND, "Split-screen Player 3 display name." );
+	Cvar_Get( "ui_splitScreenP3Model", DEFAULT_MODEL"/default", CVAR_ARCHIVE_ND, "Split-screen Player 3 model/skin." );
+	Cvar_Get( "ui_splitScreenP3Saber1", DEFAULT_SABER, CVAR_ARCHIVE_ND, "Split-screen Player 3 primary saber." );
+	Cvar_Get( "ui_splitScreenP3Saber2", "none", CVAR_ARCHIVE_ND, "Split-screen Player 3 secondary saber." );
+	Cvar_Get( "ui_splitScreenP3Color1", "2", CVAR_ARCHIVE_ND, "Split-screen Player 3 saber color 1." );
+	Cvar_Get( "ui_splitScreenP3Color2", "3", CVAR_ARCHIVE_ND, "Split-screen Player 3 saber color 2." );
+	Cvar_Get( "ui_splitScreenP3CharRed", "255", CVAR_ARCHIVE_ND, "Split-screen Player 3 custom character red channel." );
+	Cvar_Get( "ui_splitScreenP3CharGreen", "255", CVAR_ARCHIVE_ND, "Split-screen Player 3 custom character green channel." );
+	Cvar_Get( "ui_splitScreenP3CharBlue", "255", CVAR_ARCHIVE_ND, "Split-screen Player 3 custom character blue channel." );
+	Cvar_Get( "ui_splitScreenP3ForcePowers", DEFAULT_FORCEPOWERS, CVAR_ARCHIVE_ND, "Split-screen Player 3 force power loadout." );
+	Cvar_Get( "ui_splitScreenP4Name", "SplitPlayer4", CVAR_ARCHIVE_ND, "Split-screen Player 4 display name." );
+	Cvar_Get( "ui_splitScreenP4Model", DEFAULT_MODEL"/default", CVAR_ARCHIVE_ND, "Split-screen Player 4 model/skin." );
+	Cvar_Get( "ui_splitScreenP4Saber1", DEFAULT_SABER, CVAR_ARCHIVE_ND, "Split-screen Player 4 primary saber." );
+	Cvar_Get( "ui_splitScreenP4Saber2", "none", CVAR_ARCHIVE_ND, "Split-screen Player 4 secondary saber." );
+	Cvar_Get( "ui_splitScreenP4Color1", "5", CVAR_ARCHIVE_ND, "Split-screen Player 4 saber color 1." );
+	Cvar_Get( "ui_splitScreenP4Color2", "3", CVAR_ARCHIVE_ND, "Split-screen Player 4 saber color 2." );
+	Cvar_Get( "ui_splitScreenP4CharRed", "255", CVAR_ARCHIVE_ND, "Split-screen Player 4 custom character red channel." );
+	Cvar_Get( "ui_splitScreenP4CharGreen", "255", CVAR_ARCHIVE_ND, "Split-screen Player 4 custom character green channel." );
+	Cvar_Get( "ui_splitScreenP4CharBlue", "255", CVAR_ARCHIVE_ND, "Split-screen Player 4 custom character blue channel." );
+	Cvar_Get( "ui_splitScreenP4ForcePowers", DEFAULT_FORCEPOWERS, CVAR_ARCHIVE_ND, "Split-screen Player 4 force power loadout." );
+	Cvar_Get( "ui_splitScreenProfileTarget", "1", CVAR_ARCHIVE_ND, "Profile menu target player for split-screen setup." );
+	Cvar_Get( "ui_splitScreenPlayerCount", "2", CVAR_ARCHIVE_ND, "Requested local split-screen player count." );
+	Cvar_Get( "ui_splitScreenGameType", "0", CVAR_ARCHIVE_ND, "Requested local split-screen game type." );
+	Cvar_Get( "ui_splitScreenMap", "mp/ffa3", CVAR_ARCHIVE_ND, "Requested local split-screen map." );
+	Cvar_Get( "ui_splitScreenSessionType", "local", CVAR_ARCHIVE_ND, "Requested split-screen session type." );
+	Cvar_Get( "ui_splitScreenP1Input", "keyboard", CVAR_ARCHIVE_ND, "Split-screen Player 1 input device assignment." );
+	Cvar_Get( "ui_splitScreenP2Input", "controller1", CVAR_ARCHIVE_ND, "Split-screen Player 2 input device assignment." );
+	Cvar_Get( "ui_splitScreenP3Input", "controller2", CVAR_ARCHIVE_ND, "Split-screen Player 3 input device assignment." );
+	Cvar_Get( "ui_splitScreenP4Input", "controller3", CVAR_ARCHIVE_ND, "Split-screen Player 4 input device assignment." );
+	Cvar_Get( "ui_splitScreenP2Joined", "0", CVAR_ARCHIVE_ND, "Whether split-screen Player 2 is currently joined." );
+	Cvar_Get( "ui_splitScreenP3Joined", "0", CVAR_ARCHIVE_ND, "Whether split-screen Player 3 is currently joined." );
+	Cvar_Get( "ui_splitScreenP4Joined", "0", CVAR_ARCHIVE_ND, "Whether split-screen Player 4 is currently joined." );
 }
 
 /*

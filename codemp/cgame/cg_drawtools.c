@@ -25,6 +25,47 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 #include "cg_local.h"
 #include "qcommon/q_shared.h"
 
+static qboolean cg_2DViewportTransformActive = qfalse;
+static float cg_2DViewportX = 0.0f;
+static float cg_2DViewportY = 0.0f;
+static float cg_2DViewportW = SCREEN_WIDTH;
+static float cg_2DViewportH = SCREEN_HEIGHT;
+
+void CG_Set2DViewportTransform( qboolean active, float x, float y, float w, float h )
+{
+	cg_2DViewportTransformActive = active;
+	cg_2DViewportX = x;
+	cg_2DViewportY = y;
+	cg_2DViewportW = w;
+	cg_2DViewportH = h;
+}
+
+void CG_Transform2DRect( float *x, float *y, float *w, float *h )
+{
+	if ( !cg_2DViewportTransformActive ) {
+		return;
+	}
+
+	*x = cg_2DViewportX + ( *x * cg_2DViewportW / SCREEN_WIDTH );
+	*y = cg_2DViewportY + ( *y * cg_2DViewportH / SCREEN_HEIGHT );
+	*w = *w * cg_2DViewportW / SCREEN_WIDTH;
+	*h = *h * cg_2DViewportH / SCREEN_HEIGHT;
+}
+
+float CG_Transform2DScale( float scale )
+{
+	float xScale;
+	float yScale;
+
+	if ( !cg_2DViewportTransformActive ) {
+		return scale;
+	}
+
+	xScale = cg_2DViewportW / SCREEN_WIDTH;
+	yScale = cg_2DViewportH / SCREEN_HEIGHT;
+	return scale * ( xScale < yScale ? xScale : yScale );
+}
+
 
 /*
 ================
@@ -95,12 +136,14 @@ Coords are virtual 640x480
 ================
 */
 void CG_DrawSides(float x, float y, float w, float h, float size) {
+	CG_Transform2DRect( &x, &y, &w, &h );
 	size *= cgs.screenXScale;
 	trap->R_DrawStretchPic( x, y, size, h, 0, 0, 0, 0, cgs.media.whiteShader );
 	trap->R_DrawStretchPic( x + w - size, y, size, h, 0, 0, 0, 0, cgs.media.whiteShader );
 }
 
 void CG_DrawTopBottom(float x, float y, float w, float h, float size) {
+	CG_Transform2DRect( &x, &y, &w, &h );
 	size *= cgs.screenYScale;
 	trap->R_DrawStretchPic( x, y, w, size, 0, 0, 0, 0, cgs.media.whiteShader );
 	trap->R_DrawStretchPic( x, y + h - size, w, size, 0, 0, 0, 0, cgs.media.whiteShader );
@@ -126,6 +169,7 @@ Coordinates are 640*480 virtual values
 =================
 */
 void CG_FillRect( float x, float y, float width, float height, const float *color ) {
+	CG_Transform2DRect( &x, &y, &width, &height );
 	trap->R_SetColor( color );
 	trap->R_DrawStretchPic( x, y, width, height, 0, 0, 0, 0, cgs.media.whiteShader);
 	trap->R_SetColor( NULL );
@@ -141,6 +185,7 @@ A width of 0 will draw with the original image width
 =================
 */
 void CG_DrawPic( float x, float y, float width, float height, qhandle_t hShader ) {
+	CG_Transform2DRect( &x, &y, &width, &height );
 	trap->R_DrawStretchPic( x, y, width, height, 0, 0, 1, 1, hShader );
 }
 
@@ -154,6 +199,7 @@ rotates around the upper right corner of the passed in point
 =================
 */
 void CG_DrawRotatePic( float x, float y, float width, float height,float angle, qhandle_t hShader ) {
+	CG_Transform2DRect( &x, &y, &width, &height );
 	trap->R_DrawRotatePic( x, y, width, height, 0, 0, 1, 1, angle, hShader );
 }
 
@@ -167,6 +213,7 @@ Actually rotates around the center point of the passed in coordinates
 =================
 */
 void CG_DrawRotatePic2( float x, float y, float width, float height,float angle, qhandle_t hShader ) {
+	CG_Transform2DRect( &x, &y, &width, &height );
 	trap->R_DrawRotatePic2( x, y, width, height, 0, 0, 1, 1, angle, hShader );
 }
 
@@ -194,6 +241,7 @@ void CG_DrawChar( int x, int y, int width, int height, int ch ) {
 	ay = y;
 	aw = width;
 	ah = height;
+	CG_Transform2DRect( &ax, &ay, &aw, &ah );
 
 	row = ch>>4;
 	col = ch&15;

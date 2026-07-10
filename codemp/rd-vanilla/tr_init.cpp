@@ -63,6 +63,8 @@ cvar_t	*r_norefresh;
 cvar_t	*r_drawentities;
 cvar_t	*r_drawworld;
 cvar_t	*r_drawfog;
+cvar_t	*r_splitScreen;
+cvar_t	*r_splitScreenLayout;
 cvar_t	*r_speeds;
 cvar_t	*r_fullbright;
 cvar_t	*r_novis;
@@ -1643,6 +1645,8 @@ void R_Register( void )
 	r_nocurves							= ri.Cvar_Get( "r_nocurves",						"0",						CVAR_CHEAT, "" );
 	r_drawworld							= ri.Cvar_Get( "r_drawworld",						"1",						CVAR_CHEAT, "" );
 	r_drawfog							= ri.Cvar_Get( "r_drawfog",						"2",						CVAR_CHEAT, "" );
+	r_splitScreen						= ri.Cvar_Get( "r_splitScreen",					"0",						CVAR_ARCHIVE_ND, "Render the main 3D scene into two local split-screen viewports." );
+	r_splitScreenLayout					= ri.Cvar_Get( "r_splitScreenLayout",				"0",						CVAR_ARCHIVE_ND, "Split-screen layout: 0 = horizontal, 1 = vertical." );
 	r_lightmap							= ri.Cvar_Get( "r_lightmap",						"0",						CVAR_CHEAT, "" );
 	r_portalOnly						= ri.Cvar_Get( "r_portalOnly",						"0",						CVAR_CHEAT, "" );
 	r_skipBackEnd						= ri.Cvar_Get( "r_skipBackEnd",					"0",						CVAR_CHEAT, "" );
