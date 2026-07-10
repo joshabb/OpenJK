@@ -79,6 +79,213 @@ static void Key_LoadConsolePlayerState( int player )
 	Com_Memcpy( historyEditLines, consoleHistoryEditLines[player], sizeof( historyEditLines ) );
 }
 
+static const char *Key_SkipConsoleToken( const char *text )
+{
+	COM_ParseExt( &text, qfalse );
+	while ( text && *text && isspace( *text ) ) {
+		text++;
+	}
+	return text ? text : "";
+}
+
+static void Key_CopyConsoleValue( const char *value, char *out, int outSize )
+{
+	int len;
+
+	while ( value && *value && isspace( *value ) ) {
+		value++;
+	}
+	if ( !value ) {
+		out[0] = '\0';
+		return;
+	}
+
+	Q_strncpyz( out, value, outSize );
+	len = strlen( out );
+	if ( len >= 2 && out[0] == '"' && out[len - 1] == '"' ) {
+		memmove( out, out + 1, len - 2 );
+		out[len - 2] = '\0';
+	}
+}
+
+static qboolean Key_SplitScreenNetworkClientActive( int player )
+{
+	return (qboolean)( player > 1 &&
+		Cvar_VariableIntegerValue( "cl_splitScreen" ) &&
+		Cvar_VariableIntegerValue( va( "cl_splitScreenP%iClientNum", player ) ) >= 0 );
+}
+
+static void Key_ApplySplitScreenProfileFromConsole( int player )
+{
+	if ( Key_SplitScreenNetworkClientActive( player ) ) {
+		Cbuf_AddText( va( "splitnet_applyprofile %i\n", player ) );
+	} else if ( Cvar_VariableIntegerValue( "cl_splitScreenLocalCmds" ) ) {
+		Cbuf_AddText( va( "cmd splitscreen_applyprofile %i\n", player ) );
+	}
+}
+
+static const char *Key_SplitScreenProfileCvarName( int player, const char *name )
+{
+	if ( !Q_stricmp( name, "name" ) ) {
+		return va( "ui_splitScreenP%iName", player );
+	}
+	if ( !Q_stricmp( name, "model" ) ) {
+		return va( "ui_splitScreenP%iModel", player );
+	}
+	if ( !Q_stricmp( name, "saber" ) || !Q_stricmp( name, "saber1" ) ) {
+		return va( "ui_splitScreenP%iSaber1", player );
+	}
+	if ( !Q_stricmp( name, "saber2" ) ) {
+		return va( "ui_splitScreenP%iSaber2", player );
+	}
+	if ( !Q_stricmp( name, "color" ) || !Q_stricmp( name, "color1" ) ) {
+		return va( "ui_splitScreenP%iColor1", player );
+	}
+	if ( !Q_stricmp( name, "color2" ) ) {
+		return va( "ui_splitScreenP%iColor2", player );
+	}
+	if ( !Q_stricmp( name, "char_color_red" ) ) {
+		return va( "ui_splitScreenP%iCharRed", player );
+	}
+	if ( !Q_stricmp( name, "char_color_green" ) ) {
+		return va( "ui_splitScreenP%iCharGreen", player );
+	}
+	if ( !Q_stricmp( name, "char_color_blue" ) ) {
+		return va( "ui_splitScreenP%iCharBlue", player );
+	}
+	if ( !Q_stricmp( name, "forcepowers" ) ) {
+		return va( "ui_splitScreenP%iForcePowers", player );
+	}
+	return NULL;
+}
+
+static const char *Key_SplitScreenControlCvarName( int player, const char *name )
+{
+	if ( !Q_stricmp( name, "sensitivity" ) ) {
+		return va( "cl_splitScreenP%iSensitivity", player );
+	}
+	if ( !Q_stricmp( name, "invert" ) ) {
+		return va( "cl_splitScreenP%iInvert", player );
+	}
+	if ( !Q_stricmp( name, "cmdhz" ) ) {
+		return va( "cl_splitScreenP%iCmdHz", player );
+	}
+	if ( !Q_stricmp( name, "movesideaxis" ) ) {
+		return va( "cl_splitScreenP%iMoveSideAxis", player );
+	}
+	if ( !Q_stricmp( name, "moveforwardaxis" ) ) {
+		return va( "cl_splitScreenP%iMoveForwardAxis", player );
+	}
+	if ( !Q_stricmp( name, "lookyawaxis" ) ) {
+		return va( "cl_splitScreenP%iLookYawAxis", player );
+	}
+	if ( !Q_stricmp( name, "lookpitchaxis" ) ) {
+		return va( "cl_splitScreenP%iLookPitchAxis", player );
+	}
+	if ( !Q_stricmp( name, "attackbutton" ) ) {
+		return va( "cl_splitScreenP%iAttackButton", player );
+	}
+	if ( !Q_stricmp( name, "altattackbutton" ) ) {
+		return va( "cl_splitScreenP%iAltAttackButton", player );
+	}
+	if ( !Q_stricmp( name, "usebutton" ) ) {
+		return va( "cl_splitScreenP%iUseButton", player );
+	}
+	if ( !Q_stricmp( name, "jumpbutton" ) ) {
+		return va( "cl_splitScreenP%iJumpButton", player );
+	}
+	return NULL;
+}
+
+static qboolean Key_SetSplitScreenConsoleCvar( int player, const char *name, const char *value )
+{
+	char valueBuffer[MAX_CVAR_VALUE_STRING];
+	char allowedPrefix[32];
+	const char *cvarName = Key_SplitScreenProfileCvarName( player, name );
+	qboolean profileCvar = qtrue;
+
+	if ( !cvarName ) {
+		cvarName = Key_SplitScreenControlCvarName( player, name );
+		profileCvar = qfalse;
+	}
+	if ( !cvarName ) {
+		Com_sprintf( allowedPrefix, sizeof( allowedPrefix ), "ui_splitScreenP%i", player );
+		if ( !Q_stricmpn( name, allowedPrefix, strlen( allowedPrefix ) ) ) {
+			cvarName = name;
+			profileCvar = qtrue;
+		}
+	}
+	if ( !cvarName ) {
+		Com_sprintf( allowedPrefix, sizeof( allowedPrefix ), "cl_splitScreenP%i", player );
+		if ( !Q_stricmpn( name, allowedPrefix, strlen( allowedPrefix ) ) ) {
+			cvarName = name;
+			profileCvar = qfalse;
+		}
+	}
+	if ( !cvarName ) {
+		return qfalse;
+	}
+
+	Key_CopyConsoleValue( value, valueBuffer, sizeof( valueBuffer ) );
+	Cvar_Set( cvarName, valueBuffer );
+	Com_Printf( "Player %i %s = %s\n", player, name, valueBuffer );
+	if ( profileCvar ) {
+		Key_ApplySplitScreenProfileFromConsole( player );
+	}
+	return qtrue;
+}
+
+static qboolean Key_ExecuteSplitScreenConsoleCommand( int player, const char *command )
+{
+	const char *cursor = command;
+	const char *value;
+	char cmd[MAX_TOKEN_CHARS];
+	char name[MAX_TOKEN_CHARS];
+
+	if ( player <= 1 || !Cvar_VariableIntegerValue( "cl_splitScreen" ) ) {
+		return qfalse;
+	}
+
+	Q_strncpyz( cmd, COM_ParseExt( &cursor, qfalse ), sizeof( cmd ) );
+	if ( !cmd[0] ) {
+		return qfalse;
+	}
+
+	if ( !Q_stricmp( cmd, "set" ) || !Q_stricmp( cmd, "seta" ) || !Q_stricmp( cmd, "setu" ) ) {
+		Q_strncpyz( name, COM_ParseExt( &cursor, qfalse ), sizeof( name ) );
+		if ( name[0] && Key_SetSplitScreenConsoleCvar( player, name, cursor ) ) {
+			return qtrue;
+		}
+	} else {
+		value = Key_SkipConsoleToken( command );
+		if ( Key_SetSplitScreenConsoleCvar( player, cmd, value ) ) {
+			return qtrue;
+		}
+	}
+
+	if ( !Q_stricmp( cmd, "team" ) ) {
+		while ( cursor && *cursor && isspace( *cursor ) ) {
+			cursor++;
+		}
+		if ( Key_SplitScreenNetworkClientActive( player ) ) {
+			Cbuf_AddText( va( "splitnet_cmd %i %s\n", player, command ) );
+		} else if ( !Q_stricmp( cursor, "s" ) || !Q_stricmp( cursor, "spectator" ) ) {
+			Cbuf_AddText( va( "cmd splitscreen_spectate %i\n", player ) );
+		} else {
+			Cbuf_AddText( va( "cmd splitscreen_join %i %s\n", player, cursor ) );
+		}
+		return qtrue;
+	}
+
+	if ( Key_SplitScreenNetworkClientActive( player ) ) {
+		Cbuf_AddText( va( "splitnet_cmd %i %s\n", player, command ) );
+		return qtrue;
+	}
+
+	Com_Printf( "Player %i console: command requires a split-screen network client: %s\n", player, cmd );
+	return qtrue;
+}
+
 int Key_GetConsolePlayer( void )
 {
 	return consolePlayer;
@@ -769,8 +976,11 @@ void Console_Key( int key ) {
 		// print executed command
 		Com_Printf( "%c%s\n", CONSOLE_PROMPT_CHAR, g_consoleField.buffer );
 
+		if ( Key_ExecuteSplitScreenConsoleCommand( Key_GetConsolePlayer(), g_consoleField.buffer ) ) {
+			// The selected split-screen player consumed the command.
+		}
 		// check if cgame wants to eat the command...?
-		if ( cls.cgameStarted && cl.mSharedMemory ) {
+		else if ( cls.cgameStarted && cl.mSharedMemory ) {
 			TCGIncomingConsoleCommand *icc = (TCGIncomingConsoleCommand *)cl.mSharedMemory;
 
 			Q_strncpyz( icc->conCommand, g_consoleField.buffer, sizeof( icc->conCommand ) );

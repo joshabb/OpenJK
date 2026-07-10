@@ -1070,6 +1070,18 @@ static void CL_SplitNetBuildUserinfo( int player, char *info, int infoSize )
 	if ( value[0] ) {
 		Info_SetValueForKey( info, "color2", value );
 	}
+	Cvar_VariableStringBuffer( va( "ui_splitScreenP%iCharRed", player ), value, sizeof( value ) );
+	if ( value[0] ) {
+		Info_SetValueForKey( info, "char_color_red", value );
+	}
+	Cvar_VariableStringBuffer( va( "ui_splitScreenP%iCharGreen", player ), value, sizeof( value ) );
+	if ( value[0] ) {
+		Info_SetValueForKey( info, "char_color_green", value );
+	}
+	Cvar_VariableStringBuffer( va( "ui_splitScreenP%iCharBlue", player ), value, sizeof( value ) );
+	if ( value[0] ) {
+		Info_SetValueForKey( info, "char_color_blue", value );
+	}
 	Cvar_VariableStringBuffer( va( "ui_splitScreenP%iForcePowers", player ), value, sizeof( value ) );
 	if ( value[0] ) {
 		Info_SetValueForKey( info, "forcepowers", value );
