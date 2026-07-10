@@ -5907,12 +5907,12 @@ static qboolean UI_CheckPassword( void )
 UI_JoinServer
 ==================
 */
-static void UI_QueueSplitScreenNetworkJoins( void )
+static void UI_QueueSplitScreenNetworkJoins( const char *serverAddress )
 {
 	int player;
 	int playerCount;
 
-	if ( !trap->Cvar_VariableValue( "cl_splitScreen" ) ) {
+	if ( !serverAddress || !serverAddress[0] || !trap->Cvar_VariableValue( "cl_splitScreen" ) ) {
 		return;
 	}
 
@@ -5923,9 +5923,9 @@ static void UI_QueueSplitScreenNetworkJoins( void )
 		playerCount = 4;
 	}
 
-	trap->Cmd_ExecuteText( EXEC_APPEND, "wait 420 ; cmd team free ; wait 20" );
+	trap->Cmd_ExecuteText( EXEC_APPEND, "wait 80" );
 	for ( player = 2; player <= playerCount; player++ ) {
-		trap->Cmd_ExecuteText( EXEC_APPEND, va( " ; cmd splitscreen_join %i ; wait 30", player ) );
+		trap->Cmd_ExecuteText( EXEC_APPEND, va( " ; splitnet_connect %i %s ; wait 20", player, serverAddress ) );
 	}
 	trap->Cmd_ExecuteText( EXEC_APPEND, "\n" );
 }
@@ -5941,7 +5941,7 @@ static void UI_JoinServer( void )
 	{
 		trap->LAN_GetServerAddressString(UI_SourceForLAN()/*ui_netSource.integer*/, uiInfo.serverStatus.displayServers[uiInfo.serverStatus.currentServer], buff, sizeof( buff ) );
 		trap->Cmd_ExecuteText( EXEC_APPEND, va( "connect %s\n", buff ) );
-		UI_QueueSplitScreenNetworkJoins();
+		UI_QueueSplitScreenNetworkJoins( buff );
 	}
 
 }
@@ -6869,7 +6869,7 @@ static void UI_RunMenuScript(char **args)
 			trap->Cvar_Set("ui_singlePlayerActive", "0");
 			if (uiInfo.currentFoundPlayerServer >= 0 && uiInfo.currentFoundPlayerServer < uiInfo.numFoundPlayerServers) {
 				trap->Cmd_ExecuteText( EXEC_APPEND, va( "connect %s\n", uiInfo.foundPlayerServerAddresses[uiInfo.currentFoundPlayerServer] ) );
-				UI_QueueSplitScreenNetworkJoins();
+				UI_QueueSplitScreenNetworkJoins( uiInfo.foundPlayerServerAddresses[uiInfo.currentFoundPlayerServer] );
 			}
 		} else if (Q_stricmp(name, "Quit") == 0) {
 			trap->Cvar_Set("ui_singlePlayerActive", "0");

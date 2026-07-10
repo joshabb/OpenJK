@@ -250,6 +250,21 @@ typedef struct clientConnection_s {
 
 extern	clientConnection_t clc;
 
+#define	MAX_SPLITSCREEN_PLAYERS	4
+
+typedef struct splitScreenClient_s {
+	qboolean			enabled;
+	qboolean			wantsConnect;
+	int					player;
+	int					qport;
+	connstate_t			state;
+	char				servername[MAX_OSPATH];
+	clientActive_t		active;
+	clientConnection_t	connection;
+} splitScreenClient_t;
+
+extern	splitScreenClient_t	cl_splitClients[MAX_SPLITSCREEN_PLAYERS + 1];
+
 /*
 ==================================================================
 
@@ -456,6 +471,9 @@ void CL_ShutdownAll( qboolean shutdownRef );
 void CL_AddReliableCommand( const char *cmd, qboolean isDisconnectCmd );
 
 void CL_StartHunkUsers( void );
+void CL_SplitNetCheckForResend( void );
+qboolean CL_SplitNetConnectionlessPacket( const netadr_t *from, msg_t *msg );
+void CL_SplitNetDisconnectAll( void );
 
 qboolean CL_GetSnapshot( int snapshotNumber, snapshot_t *snapshot );
 qboolean CL_GetDefaultState( int index, entityState_t *state );

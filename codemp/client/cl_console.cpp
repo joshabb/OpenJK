@@ -62,13 +62,14 @@ vec4_t	console_color = {0.509f, 0.609f, 0.847f, 1.0f};
 Con_ToggleConsole_f
 ================
 */
-void Con_ToggleConsole_f (void) {
+static void Con_ToggleConsoleForPlayer( int player ) {
 	// closing a full screen console restarts the demo loop
 	if ( cls.state == CA_DISCONNECTED && Key_GetCatcher( ) == KEYCATCH_CONSOLE ) {
 		CL_StartDemoLoop();
 		return;
 	}
 
+	Key_SetConsolePlayer( player );
 	if( con_autoclear->integer )
 		Field_Clear( &g_consoleField );
 	g_consoleField.widthInChars = g_console_field_width;
@@ -76,6 +77,19 @@ void Con_ToggleConsole_f (void) {
 	Con_ClearNotify ();
 	Key_SetCatcher( Key_GetCatcher( ) ^ KEYCATCH_CONSOLE );
 }
+
+void Con_ToggleConsole_f (void) {
+	int player = 1;
+
+	if ( Cmd_Argc() > 1 ) {
+		player = atoi( Cmd_Argv( 1 ) );
+	}
+	Con_ToggleConsoleForPlayer( player );
+}
+
+static void Con_ToggleConsole2_f( void ) { Con_ToggleConsoleForPlayer( 2 ); }
+static void Con_ToggleConsole3_f( void ) { Con_ToggleConsoleForPlayer( 3 ); }
+static void Con_ToggleConsole4_f( void ) { Con_ToggleConsoleForPlayer( 4 ); }
 
 /*
 ===================
@@ -463,6 +477,7 @@ void Con_CheckResize (void)
 	con.xadjust = ((float)SCREEN_WIDTH) / cls.glconfig.vidWidth;
 	con.yadjust = ((float)SCREEN_HEIGHT) / cls.glconfig.vidHeight;
 	g_consoleField.widthInChars = width - 1; // Command prompt
+	Key_SetConsoleWidth( width - 1 );
 
 	if (con.rowwidth != rowwidth)
 	{
@@ -502,12 +517,16 @@ void Con_Init (void) {
 
 	Field_Clear( &g_consoleField );
 	g_consoleField.widthInChars = g_console_field_width;
+	Key_InitConsolePlayers( g_console_field_width );
 	for ( i = 0 ; i < COMMAND_HISTORY ; i++ ) {
 		Field_Clear( &historyEditLines[i] );
 		historyEditLines[i].widthInChars = g_console_field_width;
 	}
 
 	Cmd_AddCommand( "toggleconsole", Con_ToggleConsole_f, "Show/hide console" );
+	Cmd_AddCommand( "toggleconsole2", Con_ToggleConsole2_f, "Show/hide Player 2 console" );
+	Cmd_AddCommand( "toggleconsole3", Con_ToggleConsole3_f, "Show/hide Player 3 console" );
+	Cmd_AddCommand( "toggleconsole4", Con_ToggleConsole4_f, "Show/hide Player 4 console" );
 	Cmd_AddCommand( "togglemenu", Con_ToggleMenu_f, "Show/hide the menu" );
 	Cmd_AddCommand( "messagemode", Con_MessageMode_f, "Global Chat" );
 	Cmd_AddCommand( "messagemode2", Con_MessageMode2_f, "Team Chat" );
@@ -529,6 +548,9 @@ Con_Shutdown
 void Con_Shutdown(void)
 {
 	Cmd_RemoveCommand("toggleconsole");
+	Cmd_RemoveCommand("toggleconsole2");
+	Cmd_RemoveCommand("toggleconsole3");
+	Cmd_RemoveCommand("toggleconsole4");
 	Cmd_RemoveCommand("togglemenu");
 	Cmd_RemoveCommand("messagemode");
 	Cmd_RemoveCommand("messagemode2");

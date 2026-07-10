@@ -37,6 +37,11 @@ field_t		g_consoleField;
 int			nextHistoryLine;	// the last line in the history buffer, not masked
 int			historyLine;		// the line being displayed from history buffer will be <= nextHistoryLine
 field_t		historyEditLines[COMMAND_HISTORY];
+static int		consolePlayer = 1;
+static field_t	consoleFields[MAX_SPLITSCREEN_PLAYERS + 1];
+static int		consoleNextHistoryLines[MAX_SPLITSCREEN_PLAYERS + 1];
+static int		consoleHistoryLines[MAX_SPLITSCREEN_PLAYERS + 1];
+static field_t	consoleHistoryEditLines[MAX_SPLITSCREEN_PLAYERS + 1][COMMAND_HISTORY];
 
 // chat
 field_t		chatField;
@@ -44,6 +49,85 @@ qboolean	chat_team;
 int			chat_playerNum;
 
 keyGlobals_t	kg;
+
+static int Key_ClampConsolePlayer( int player )
+{
+	if ( player < 1 ) {
+		return 1;
+	}
+	if ( player > MAX_SPLITSCREEN_PLAYERS ) {
+		return MAX_SPLITSCREEN_PLAYERS;
+	}
+	return player;
+}
+
+static void Key_SaveConsolePlayerState( int player )
+{
+	player = Key_ClampConsolePlayer( player );
+	consoleFields[player] = g_consoleField;
+	consoleNextHistoryLines[player] = nextHistoryLine;
+	consoleHistoryLines[player] = historyLine;
+	Com_Memcpy( consoleHistoryEditLines[player], historyEditLines, sizeof( historyEditLines ) );
+}
+
+static void Key_LoadConsolePlayerState( int player )
+{
+	player = Key_ClampConsolePlayer( player );
+	g_consoleField = consoleFields[player];
+	nextHistoryLine = consoleNextHistoryLines[player];
+	historyLine = consoleHistoryLines[player];
+	Com_Memcpy( historyEditLines, consoleHistoryEditLines[player], sizeof( historyEditLines ) );
+}
+
+int Key_GetConsolePlayer( void )
+{
+	return consolePlayer;
+}
+
+void Key_SetConsolePlayer( int player )
+{
+	player = Key_ClampConsolePlayer( player );
+	if ( player == consolePlayer ) {
+		return;
+	}
+	Key_SaveConsolePlayerState( consolePlayer );
+	consolePlayer = player;
+	Key_LoadConsolePlayerState( consolePlayer );
+}
+
+void Key_InitConsolePlayers( int widthInChars )
+{
+	int player;
+	int i;
+
+	for ( player = 1; player <= MAX_SPLITSCREEN_PLAYERS; player++ ) {
+		Field_Clear( &consoleFields[player] );
+		consoleFields[player].widthInChars = widthInChars;
+		consoleNextHistoryLines[player] = 0;
+		consoleHistoryLines[player] = 0;
+		for ( i = 0; i < COMMAND_HISTORY; i++ ) {
+			Field_Clear( &consoleHistoryEditLines[player][i] );
+			consoleHistoryEditLines[player][i].widthInChars = widthInChars;
+		}
+	}
+	consolePlayer = 1;
+	Key_LoadConsolePlayerState( consolePlayer );
+}
+
+void Key_SetConsoleWidth( int widthInChars )
+{
+	int player;
+	int i;
+
+	Key_SaveConsolePlayerState( consolePlayer );
+	for ( player = 1; player <= MAX_SPLITSCREEN_PLAYERS; player++ ) {
+		consoleFields[player].widthInChars = widthInChars;
+		for ( i = 0; i < COMMAND_HISTORY; i++ ) {
+			consoleHistoryEditLines[player][i].widthInChars = widthInChars;
+		}
+	}
+	Key_LoadConsolePlayerState( consolePlayer );
+}
 
 // do NOT blithely change any of the key names (3rd field) here, since they have to match the key binds
 //	in the CFG files, they're also prepended with "KEYNAME_" when looking up StringEd references

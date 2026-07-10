@@ -111,7 +111,7 @@ void Netchan_TransmitNextFragment( netchan_t *chan ) {
 
 	// send the qport if we are a client
 	if ( chan->sock == NS_CLIENT ) {
-		MSG_WriteShort( &send, qport->integer );
+		MSG_WriteShort( &send, chan->qport );
 	}
 
 	// copy the reliable message to the packet first
@@ -190,7 +190,7 @@ void Netchan_Transmit( netchan_t *chan, int length, const byte *data ) {
 
 	// send the qport if we are a client
 	if ( chan->sock == NS_CLIENT ) {
-		MSG_WriteShort( &send, qport->integer );
+		MSG_WriteShort( &send, chan->qport );
 	}
 
 	MSG_WriteData( &send, data, length );
@@ -678,4 +678,3 @@ qboolean	NET_StringToAdr( const char *s, netadr_t *a ) {
 
 	return qtrue;
 }
-
