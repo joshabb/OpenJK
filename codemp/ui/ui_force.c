@@ -200,9 +200,13 @@ void UI_UpdateClientForcePowers(const char *teamArg)
 		uiForcePowersRank[14], uiForcePowersRank[15], uiForcePowersRank[16],
 		uiForcePowersRank[17]);
 
-	if ( trap->Cvar_VariableValue( "ui_splitScreenProfileTarget" ) == 2 ) {
-		trap->Cvar_Set( "ui_splitScreenP2ForcePowers", forceString );
-		trap->Cmd_ExecuteText( EXEC_APPEND, "cmd splitscreen_applyprofile\n" );
+	if ( trap->Cvar_VariableValue( "ui_splitScreenProfileTarget" ) >= 2 ) {
+		int splitTarget = (int)trap->Cvar_VariableValue( "ui_splitScreenProfileTarget" );
+		if ( splitTarget > 4 ) {
+			splitTarget = 4;
+		}
+		trap->Cvar_Set( va( "ui_splitScreenP%iForcePowers", splitTarget ), forceString );
+		trap->Cmd_ExecuteText( EXEC_APPEND, va( "cmd splitscreen_applyprofile %i\n", splitTarget ) );
 		gTouchedForce = qfalse;
 		return;
 	}

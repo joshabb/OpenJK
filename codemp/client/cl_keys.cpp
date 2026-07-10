@@ -1195,6 +1195,22 @@ void CL_InitKeyCommands( void ) {
 	Cmd_AddCommand( "bindlist", Key_Bindlist_f, "Show all bindings in the console" );
 	Cmd_AddCommand( "closemenu", [](){ UIVM_SetActiveMenu( UIMENU_NONE ); }, "Close the active menu" );
 	Cmd_AddCommand( "splitscreen_menu", [](){ UIVM_SetActiveMenu( UIMENU_SPLITSCREEN ); }, "Open the local split-screen player setup menu" );
+	Cmd_AddCommand( "splitscreen_topmenu", [](){
+		int player = atoi( Cmd_Argv( 1 ) );
+		if ( player < 1 ) {
+			player = 1;
+		} else if ( player > 4 ) {
+			player = 4;
+		}
+		Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
+		Cvar_Set( "ui_splitScreenInputTarget", va( "%i", player ) );
+		Cvar_Set( "ui_splitScreenMenuMode", "top" );
+		Cvar_Set( "ui_splitScreenConfiguring", "0" );
+		UIVM_SetActiveMenu( UIMENU_INGAME );
+		Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
+		Cvar_Set( "ui_splitScreenInputTarget", va( "%i", player ) );
+		Cvar_Set( "ui_splitScreenMenuMode", "top" );
+	}, "Open a split-screen player's in-game top menu" );
 }
 
 /*

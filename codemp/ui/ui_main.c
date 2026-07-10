@@ -5623,6 +5623,7 @@ static void UI_OpenSplitScreenPlayerProfile( int player )
 static void UI_LoadSplitScreenPlayerProfile( int player )
 {
 	char buf[MAX_NETNAME] = {0};
+	char cvarName[64];
 
 	if ( player < 1 ) {
 		player = 1;
@@ -5634,8 +5635,13 @@ static void UI_LoadSplitScreenPlayerProfile( int player )
 	trap->Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
 	Q_strncpyz( buf, UI_Cvar_VariableString( va( "ui_splitScreenP%iName", player ) ), sizeof( buf ) );
 	trap->Cvar_Set( "ui_Name", buf );
+	Com_sprintf( cvarName, sizeof( cvarName ), "ui_splitScreenP%iForcePowers", player );
+	if ( UI_Cvar_VariableString( cvarName )[0] ) {
+		trap->Cvar_Set( "forcepowers", UI_Cvar_VariableString( cvarName ) );
+	}
 	UI_GetCharacterCvars();
 	UI_GetSaberCvars();
+	UI_UpdateForcePowers();
 }
 
 static void UI_SelectSplitScreenSaberHilt( int player, const char *itemName, int saberSlot, qboolean staff )
@@ -10758,6 +10764,9 @@ static qboolean UI_SplitScreenPlayerSetupVisible( void )
 {
 	char mode[16];
 
+	if ( !( trap->Key_GetCatcher() & KEYCATCH_UI ) ) {
+		return qfalse;
+	}
 	if ( UI_MenuIsVisible( "splitscreen" ) ) {
 		return qfalse;
 	}
@@ -10769,6 +10778,9 @@ static qboolean UI_SplitScreenIngameVisible( void )
 {
 	char mode[16];
 
+	if ( !( trap->Key_GetCatcher() & KEYCATCH_UI ) ) {
+		return qfalse;
+	}
 	if ( UI_MenuIsVisible( "splitscreen" ) ) {
 		return qtrue;
 	}
@@ -11047,14 +11059,25 @@ static void UI_SplitScreenSetupViewport( int player, int playerCount, float *x, 
 		return;
 	}
 
+	if ( playerCount == 3 ) {
+		if ( player == 1 ) {
+			*x = 0.0f;
+			*y = 0.0f;
+			*w = SCREEN_WIDTH;
+			*h = SCREEN_HEIGHT / 2.0f;
+			return;
+		}
+		*x = player == 2 ? 0.0f : ( SCREEN_WIDTH / 2.0f );
+		*y = SCREEN_HEIGHT / 2.0f;
+		*w = SCREEN_WIDTH / 2.0f;
+		*h = SCREEN_HEIGHT / 2.0f;
+		return;
+	}
+
 	*w = SCREEN_WIDTH / 2.0f;
 	*h = SCREEN_HEIGHT / 2.0f;
 	*x = ( ( player - 1 ) % 2 ) ? ( SCREEN_WIDTH / 2.0f ) : 0.0f;
 	*y = ( player > 2 ) ? ( SCREEN_HEIGHT / 2.0f ) : 0.0f;
-
-	if ( playerCount == 3 && player == 3 ) {
-		*x = SCREEN_WIDTH / 4.0f;
-	}
 }
 
 static int UI_SplitScreenSetupPlayerForPoint( int x, int y )
@@ -11065,11 +11088,26 @@ static int UI_SplitScreenSetupPlayerForPoint( int x, int y )
 		return y >= ( SCREEN_HEIGHT / 2 ) ? 2 : 1;
 	}
 
-	if ( playerCount == 3 && y >= ( SCREEN_HEIGHT / 2 ) ) {
-		return 3;
+	if ( playerCount == 3 ) {
+		if ( y < ( SCREEN_HEIGHT / 2 ) ) {
+			return 1;
+		}
+		return x >= ( SCREEN_WIDTH / 2 ) ? 3 : 2;
 	}
 
 	return ( y >= ( SCREEN_HEIGHT / 2 ) ? 3 : 1 ) + ( x >= ( SCREEN_WIDTH / 2 ) ? 1 : 0 );
+}
+
+static int UI_SplitScreenInputTargetPlayer( void )
+{
+	int player = (int)trap->Cvar_VariableValue( "ui_splitScreenInputTarget" );
+	int playerCount = UI_SplitScreenSetupPlayerCount();
+
+	if ( player >= 1 && player <= playerCount ) {
+		return player;
+	}
+
+	return UI_SplitScreenSetupPlayerForPoint( uiInfo.uiDC.cursorx, uiInfo.uiDC.cursory );
 }
 
 static void UI_SplitScreenSetupPointToMenu( int player, int screenX, int screenY, int *menuX, int *menuY )
@@ -11103,6 +11141,12 @@ static menuDef_t *UI_SplitScreenSetupMenuForPlayer( int player, int activePlayer
 
 	if ( saberMenu && ( saberMenu->window.flags & WINDOW_VISIBLE ) && activePlayer == player ) {
 		return saberMenu;
+	}
+
+	menuDef_t *forceMenu = Menus_FindByName( "ingame_playerforce" );
+
+	if ( forceMenu && ( forceMenu->window.flags & WINDOW_VISIBLE ) && activePlayer == player ) {
+		return forceMenu;
 	}
 
 	return Menus_FindByName( "ingame_player" );
@@ -11161,6 +11205,7 @@ static void UI_SaveSplitScreenPlayerProfile( int player )
 	trap->Cvar_Set( "ui_splitScreenConfiguring", "1" );
 	trap->Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
 	trap->Cvar_Set( va( "ui_splitScreenP%iName", player ), UI_Cvar_VariableString( "ui_Name" ) );
+	trap->Cvar_Set( va( "ui_splitScreenP%iForcePowers", player ), UI_Cvar_VariableString( "forcepowers" ) );
 	UI_UpdateCharacterCvars();
 	UI_UpdateSaberCvars();
 }
@@ -11186,7 +11231,7 @@ static void UI_PaintSplitScreenPlayerSetup( void )
 	playerCount = UI_SplitScreenSetupPlayerCount();
 	activeTarget = (int)trap->Cvar_VariableValue( "ui_splitScreenProfileTarget" );
 	if ( activeTarget < 1 || activeTarget > playerCount ) {
-		activeTarget = UI_SplitScreenSetupPlayerForPoint( uiInfo.uiDC.cursorx, uiInfo.uiDC.cursory );
+		activeTarget = UI_SplitScreenInputTargetPlayer();
 	}
 
 	UI_SetViewportTransform( qfalse, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT );
@@ -11216,7 +11261,7 @@ static void UI_PaintSplitScreenPlayerSetup( void )
 
 	UI_FillRect( 0, SCREEN_HEIGHT / 2.0f - 1.0f, SCREEN_WIDTH, 2, divider );
 	if ( playerCount > 2 ) {
-		UI_FillRect( SCREEN_WIDTH / 2.0f - 1.0f, 0, 2, SCREEN_HEIGHT, divider );
+		UI_FillRect( SCREEN_WIDTH / 2.0f - 1.0f, playerCount == 3 ? SCREEN_HEIGHT / 2.0f : 0, 2, playerCount == 3 ? SCREEN_HEIGHT / 2.0f : SCREEN_HEIGHT, divider );
 	}
 	UI_PaintSplitScreenKeyboard();
 }
@@ -11234,7 +11279,7 @@ static void UI_PaintSplitScreenIngameMenus( void )
 	}
 
 	playerCount = UI_SplitScreenSetupPlayerCount();
-	activeTarget = UI_SplitScreenSetupPlayerForPoint( uiInfo.uiDC.cursorx, uiInfo.uiDC.cursory );
+	activeTarget = UI_SplitScreenInputTargetPlayer();
 
 	UI_HideSplitScreenIngameSubmenus();
 	ingameMenu->window.flags |= WINDOW_FORCED;
@@ -11261,7 +11306,7 @@ static void UI_PaintSplitScreenIngameMenus( void )
 
 	UI_FillRect( 0, SCREEN_HEIGHT / 2.0f - 1.0f, SCREEN_WIDTH, 2, divider );
 	if ( playerCount > 2 ) {
-		UI_FillRect( SCREEN_WIDTH / 2.0f - 1.0f, 0, 2, SCREEN_HEIGHT, divider );
+		UI_FillRect( SCREEN_WIDTH / 2.0f - 1.0f, playerCount == 3 ? SCREEN_HEIGHT / 2.0f : 0, 2, playerCount == 3 ? SCREEN_HEIGHT / 2.0f : SCREEN_HEIGHT, divider );
 	}
 }
 
@@ -11296,7 +11341,7 @@ static qboolean UI_HandleSplitScreenPlayerSetupKey( int key, qboolean down )
 		return qtrue;
 	}
 
-	player = UI_SplitScreenSetupPlayerForPoint( uiInfo.uiDC.cursorx, uiInfo.uiDC.cursory );
+	player = UI_SplitScreenInputTargetPlayer();
 	UI_SplitScreenSetupPointToMenu( player, uiInfo.uiDC.cursorx, uiInfo.uiDC.cursory, &menuX, &menuY );
 	UI_LoadSplitScreenPlayerProfile( player );
 	menu = UI_SplitScreenSetupMenuForPlayer( player, player );
@@ -11347,7 +11392,7 @@ static qboolean UI_HandleSplitScreenIngameKey( int key, qboolean down )
 		return qtrue;
 	}
 
-	player = UI_SplitScreenSetupPlayerForPoint( uiInfo.uiDC.cursorx, uiInfo.uiDC.cursory );
+	player = UI_SplitScreenInputTargetPlayer();
 	UI_SplitScreenSetupPointToMenu( player, uiInfo.uiDC.cursorx, uiInfo.uiDC.cursory, &menuX, &menuY );
 	UI_LoadSplitScreenPlayerProfile( player );
 	menu = Menus_FindByName( "ingame" );
@@ -11362,9 +11407,21 @@ static qboolean UI_HandleSplitScreenIngameKey( int key, qboolean down )
 	menu->window.flags |= WINDOW_FORCED;
 	Menu_HandleMouseMove( menu, menuX, menuY );
 	Menu_HandleKey( menu, key, down );
-	if ( UI_MenuIsVisible( "ingame_player" ) || UI_MenuIsVisible( "ingame_saber" ) ) {
+	if ( UI_MenuIsVisible( "ingame_setup" ) || UI_MenuIsVisible( "ingame_controls" ) ) {
+		trap->Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
+		trap->Cvar_Set( "ui_splitScreenInputTarget", va( "%i", player ) );
+		trap->Cvar_Set( "ui_splitScreenConfiguring", "0" );
+		trap->Cvar_Set( "ui_splitScreenMenuMode", "" );
+		uiInfo.uiDC.cursorx = oldX;
+		uiInfo.uiDC.cursory = oldY;
+		return qtrue;
+	}
+	if ( UI_MenuIsVisible( "ingame_player" ) || UI_MenuIsVisible( "ingame_saber" ) || UI_MenuIsVisible( "ingame_playerforce" ) ) {
 		Menus_CloseByName( "ingame_player" );
 		Menus_CloseByName( "ingame_saber" );
+		if ( !UI_MenuIsVisible( "ingame_playerforce" ) ) {
+			Menus_CloseByName( "ingame_playerforce" );
+		}
 		Menus_CloseByName( "splitscreen" );
 		trap->Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
 		trap->Cvar_Set( "ui_splitScreenMenuMode", "setup" );
@@ -11600,6 +11657,7 @@ void UI_MouseEvent( int dx, int dy )
 		int oldY = uiInfo.uiDC.cursory;
 
 		UI_SplitScreenSetupPointToMenu( player, uiInfo.uiDC.cursorx, uiInfo.uiDC.cursory, &menuX, &menuY );
+		trap->Cvar_Set( "ui_splitScreenInputTarget", va( "%i", player ) );
 		UI_LoadSplitScreenPlayerProfile( player );
 		menu = UI_SplitScreenSetupMenuForPlayer( player, player );
 		if ( menu ) {
@@ -11620,6 +11678,7 @@ void UI_MouseEvent( int dx, int dy )
 		int oldY = uiInfo.uiDC.cursory;
 
 		UI_SplitScreenSetupPointToMenu( player, uiInfo.uiDC.cursorx, uiInfo.uiDC.cursory, &menuX, &menuY );
+		trap->Cvar_Set( "ui_splitScreenInputTarget", va( "%i", player ) );
 		UI_LoadSplitScreenPlayerProfile( player );
 		menu = Menus_FindByName( "ingame" );
 		if ( menu ) {

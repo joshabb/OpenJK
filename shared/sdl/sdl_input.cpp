@@ -31,6 +31,7 @@ static cvar_t *in_keyboardDebug     = NULL;
 
 static SDL_Joystick *stick = NULL;
 static SDL_Joystick *splitSticks[MAX_SPLITSCREEN_JOYSTICKS];
+static qboolean splitMenuButtonDown[MAX_SPLITSCREEN_JOYSTICKS];
 
 static qboolean mouseAvailable = qfalse;
 static qboolean mouseActive = qfalse;
@@ -591,6 +592,7 @@ static void IN_QueueSplitScreenUIKey( int player, int key, qboolean down )
 	}
 
 	Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
+	Cvar_Set( "ui_splitScreenInputTarget", va( "%i", player ) );
 	Sys_QueEvent( 0, SE_KEY, key, down, 0, NULL );
 }
 
@@ -632,6 +634,7 @@ static void IN_UpdateSplitScreenControllerUIEvents( int player, int slot, SDL_Jo
 		case 2:
 			if ( pressed ) {
 				Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
+				Cvar_Set( "ui_splitScreenInputTarget", va( "%i", player ) );
 				Cvar_Set( "ui_splitScreenKeyboardOpen", va( "%i", player ) );
 			}
 			break;
@@ -759,7 +762,14 @@ static void IN_UpdateSplitScreenControllerState( void )
 		}
 		for ( i = 0; i < total; i++ )
 		{
-			CL_SplitScreenSetControllerButton( player, i, (qboolean)( SDL_JoystickGetButton( controller, i ) != 0 ) );
+			qboolean pressed = (qboolean)( SDL_JoystickGetButton( controller, i ) != 0 );
+			if ( i == 7 ) {
+				if ( pressed && !splitMenuButtonDown[slot] && !( Key_GetCatcher() & KEYCATCH_UI ) ) {
+					Cbuf_ExecuteText( EXEC_APPEND, va( "splitscreen_topmenu %i\n", player ) );
+				}
+				splitMenuButtonDown[slot] = pressed;
+			}
+			CL_SplitScreenSetControllerButton( player, i, pressed );
 		}
 
 		IN_UpdateSplitScreenControllerUIEvents( player, slot, controller );
