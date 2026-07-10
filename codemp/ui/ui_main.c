@@ -11059,12 +11059,36 @@ static void UI_CloseSplitScreenKeyboard( qboolean accept )
 		if ( !Q_stricmp( ui_splitKeyboard.targetCvar, va( "ui_splitScreenP%iName", ui_splitKeyboard.player ) ) ) {
 			trap->Cvar_Set( "ui_Name", ui_splitKeyboard.text );
 		}
-		if ( profileCvar && ui_splitKeyboard.player > 1 ) {
+		if ( profileCvar ) {
 			UI_ApplySplitScreenPlayerProfile( ui_splitKeyboard.player );
 		}
 	}
 
 	ui_splitKeyboard.active = qfalse;
+}
+
+static int UI_NormalizeSplitScreenMenuKey( int key )
+{
+	switch ( key ) {
+	case A_JOY0:
+	case A_JOY7:
+		return A_ENTER;
+	case A_JOY1:
+	case A_JOY6:
+		return A_ESCAPE;
+	case A_JOY2:
+		return A_BACKSPACE;
+	case A_JOY11:
+		return A_CURSOR_UP;
+	case A_JOY12:
+		return A_CURSOR_DOWN;
+	case A_JOY13:
+		return A_CURSOR_LEFT;
+	case A_JOY14:
+		return A_CURSOR_RIGHT;
+	default:
+		return key;
+	}
 }
 
 static void UI_SplitScreenKeyboardAppend( const char *text )
@@ -11108,6 +11132,8 @@ static qboolean UI_HandleSplitScreenKeyboardKey( int key, qboolean down )
 	if ( !down ) {
 		return qtrue;
 	}
+
+	key = UI_NormalizeSplitScreenMenuKey( key );
 
 	switch ( key ) {
 	case A_CURSOR_LEFT:
@@ -11754,6 +11780,8 @@ static qboolean UI_HandleSplitScreenPlayerSetupKey( int key, qboolean down )
 		return qtrue;
 	}
 
+	key = UI_NormalizeSplitScreenMenuKey( key );
+
 	if ( key == A_ESCAPE ) {
 		Menus_CloseByName( "ingame_saber" );
 		Menus_CloseByName( "splitscreen_players" );
@@ -11894,6 +11922,8 @@ static qboolean UI_HandleSplitScreenJoinKey( int key, qboolean down )
 		return qtrue;
 	}
 
+	key = UI_NormalizeSplitScreenMenuKey( key );
+
 	player = UI_SplitScreenInputTargetPlayer();
 	row = (int)trap->Cvar_VariableValue( "ui_splitScreenActionRow" );
 	maxRow = UI_SplitScreenJoinMaxRow();
@@ -11935,6 +11965,8 @@ static qboolean UI_HandleSplitScreenExitKey( int key, qboolean down )
 	if ( !down ) {
 		return qtrue;
 	}
+
+	key = UI_NormalizeSplitScreenMenuKey( key );
 
 	player = UI_SplitScreenInputTargetPlayer();
 	row = (int)trap->Cvar_VariableValue( "ui_splitScreenActionRow" );
@@ -12131,6 +12163,8 @@ static qboolean UI_HandleSplitScreenControlsKey( int key, qboolean down )
 		return qtrue;
 	}
 
+	key = UI_NormalizeSplitScreenMenuKey( key );
+
 	player = UI_SplitScreenInputTargetPlayer();
 	row = (int)trap->Cvar_VariableValue( "ui_splitScreenActionRow" );
 	maxRow = UI_SplitScreenControlsMaxRow( player );
@@ -12179,6 +12213,8 @@ static qboolean UI_HandleSplitScreenIngameKey( int key, qboolean down )
 	if ( !down ) {
 		return qtrue;
 	}
+
+	key = UI_NormalizeSplitScreenMenuKey( key );
 
 	if ( key == A_ESCAPE ) {
 		Menus_CloseAll();

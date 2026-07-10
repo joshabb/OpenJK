@@ -286,6 +286,30 @@ static qboolean Key_ExecuteSplitScreenConsoleCommand( int player, const char *co
 	return qtrue;
 }
 
+static int Key_TranslateSplitScreenMenuKey( int key )
+{
+	switch ( key ) {
+	case A_JOY0:	// A / Cross
+	case A_JOY7:	// Start
+		return A_ENTER;
+	case A_JOY1:	// B / Circle
+	case A_JOY6:	// Back / Select
+		return A_ESCAPE;
+	case A_JOY2:	// X / Square
+		return A_BACKSPACE;
+	case A_JOY11:
+		return A_CURSOR_UP;
+	case A_JOY12:
+		return A_CURSOR_DOWN;
+	case A_JOY13:
+		return A_CURSOR_LEFT;
+	case A_JOY14:
+		return A_CURSOR_RIGHT;
+	default:
+		return key;
+	}
+}
+
 int Key_GetConsolePlayer( void )
 {
 	return consolePlayer;
@@ -1678,7 +1702,10 @@ void CL_KeyDownEvent( int key, unsigned time )
 	}
 
 	if ( Cvar_VariableIntegerValue( "cl_splitScreen" ) && key >= A_JOY0 && key <= A_JOY31 ) {
-		return;
+		if ( !( Key_GetCatcher() & ( KEYCATCH_CONSOLE | KEYCATCH_UI | KEYCATCH_CGAME ) ) ) {
+			return;
+		}
+		key = Key_TranslateSplitScreenMenuKey( key );
 	}
 
 	// send the bound action
@@ -1732,7 +1759,10 @@ void CL_KeyUpEvent( int key, unsigned time )
 		return;
 
 	if ( Cvar_VariableIntegerValue( "cl_splitScreen" ) && key >= A_JOY0 && key <= A_JOY31 ) {
-		return;
+		if ( !( Key_GetCatcher() & ( KEYCATCH_CONSOLE | KEYCATCH_UI | KEYCATCH_CGAME ) ) ) {
+			return;
+		}
+		key = Key_TranslateSplitScreenMenuKey( key );
 	}
 
 	//
