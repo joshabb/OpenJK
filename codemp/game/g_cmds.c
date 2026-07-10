@@ -3633,6 +3633,45 @@ static void Cmd_SplitScreenLeave_f( gentity_t *ent ) {
 	trap->SendServerCommand( ent->s.number, va( "print \"Split-screen: Player %i left\n\"", player ) );
 }
 
+static qboolean G_SplitScreenHandleDeadClientCommand( gentity_t *split, const usercmd_t *cmd ) {
+	gclient_t *client;
+
+	if ( !split || !split->client ) {
+		return qfalse;
+	}
+
+	client = split->client;
+	if ( client->ps.stats[STAT_HEALTH] > 0 ||
+		( client->ps.eFlags2 & EF2_HELD_BY_MONSTER ) ||
+		split->s.eType == ET_NPC ) {
+		return qfalse;
+	}
+
+	if ( level.time > client->respawnTime && !gDoSlowMoDuel ) {
+		int forceRes = g_forceRespawn.integer;
+
+		if ( level.gametype == GT_POWERDUEL ) {
+			forceRes = 1;
+		} else if ( level.gametype == GT_SIEGE && g_siegeRespawn.integer ) {
+			forceRes = 1;
+		}
+
+		if ( forceRes > 0 && ( level.time - client->respawnTime ) > forceRes * 1000 ) {
+			ClientRespawn( split );
+			return qtrue;
+		}
+
+		if ( cmd->buttons & ( BUTTON_ATTACK | BUTTON_USE_HOLDABLE ) ) {
+			ClientRespawn( split );
+			return qtrue;
+		}
+	} else if ( gDoSlowMoDuel ) {
+		client->respawnTime = level.time + 1000;
+	}
+
+	return qtrue;
+}
+
 static void Cmd_SplitScreenCmd_f( gentity_t *ent ) {
 	usercmd_t cmd;
 	int clientNum;
@@ -3682,12 +3721,7 @@ static void Cmd_SplitScreenCmd_f( gentity_t *ent ) {
 	trap->Argv( argBase + 10, arg, sizeof( arg ) );
 	cmd.invensel = (byte)atoi( arg );
 
-	if ( g_entities[clientNum].client &&
-		g_entities[clientNum].client->ps.stats[STAT_HEALTH] <= 0 &&
-		level.time > g_entities[clientNum].client->respawnTime &&
-		!gDoSlowMoDuel &&
-		( cmd.buttons & ( BUTTON_ATTACK | BUTTON_USE_HOLDABLE ) ) ) {
-		ClientRespawn( &g_entities[clientNum] );
+	if ( G_SplitScreenHandleDeadClientCommand( &g_entities[clientNum], &cmd ) ) {
 		return;
 	}
 
