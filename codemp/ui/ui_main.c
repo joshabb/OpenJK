@@ -4750,6 +4750,8 @@ static void UI_StartSkirmish(qboolean next) {
 	}
 }
 
+static void UI_ApplySplitScreenPlayerProfile( int player );
+
 static void UI_Update(const char *name) {
 	int	val = trap->Cvar_VariableValue(name);
 
@@ -4765,7 +4767,7 @@ static void UI_Update(const char *name) {
 		Q_strncpyz( buf, UI_Cvar_VariableString( "ui_Name" ), sizeof( buf ) );
 		if ( splitTarget > 1 ) {
 			trap->Cvar_Set( va( "ui_splitScreenP%iName", splitTarget ), buf );
-			trap->Cmd_ExecuteText( EXEC_APPEND, va( "cmd splitscreen_applyprofile %i\n", splitTarget ) );
+			UI_ApplySplitScreenPlayerProfile( splitTarget );
 		} else {
 			trap->Cvar_Set( "name", buf );
 		}
@@ -5110,7 +5112,7 @@ static void UI_UpdateCharacterCvars ( void )
 		if ( splitTarget == 1 ) {
 			UI_CopySplitScreenP1ProfileToGameCvars();
 		} else {
-		trap->Cmd_ExecuteText( EXEC_APPEND, va( "cmd splitscreen_applyprofile %i\n", splitTarget ) );
+			UI_ApplySplitScreenPlayerProfile( splitTarget );
 		}
 		return;
 	}
@@ -5392,7 +5394,7 @@ static void UI_UpdateSaberCvars ( void )
 		if ( splitTarget == 1 ) {
 			UI_CopySplitScreenP1ProfileToGameCvars();
 		} else {
-			trap->Cmd_ExecuteText( EXEC_APPEND, va( "cmd splitscreen_applyprofile %i\n", splitTarget ) );
+			UI_ApplySplitScreenPlayerProfile( splitTarget );
 		}
 		return;
 	}
@@ -5924,11 +5926,10 @@ static void UI_QueueSplitScreenNetworkJoins( const char *serverAddress )
 		playerCount = 4;
 	}
 
-	trap->Cmd_ExecuteText( EXEC_APPEND, "wait 80" );
+	trap->Cmd_ExecuteText( EXEC_APPEND, "wait 80\n" );
 	for ( player = 2; player <= playerCount; player++ ) {
-		trap->Cmd_ExecuteText( EXEC_APPEND, va( " ; splitnet_connect %i %s ; wait 20", player, serverAddress ) );
+		trap->Cmd_ExecuteText( EXEC_APPEND, va( "splitnet_connect %i %s\nwait 20\n", player, serverAddress ) );
 	}
-	trap->Cmd_ExecuteText( EXEC_APPEND, "\n" );
 }
 
 static void UI_JoinServer( void )
@@ -6558,18 +6559,18 @@ static void UI_StartSplitScreenServer( void )
 		char joinCommands[MAX_STRING_CHARS] = {0};
 		int player;
 
-		Com_sprintf( joinCommands, sizeof( joinCommands ), "wait ; wait ; devmap %s ; wait 300", map );
+		Com_sprintf( joinCommands, sizeof( joinCommands ), "wait\nwait\ndevmap %s\nwait 300\n", map );
 		if ( gameType >= GT_TEAM ) {
-			Q_strcat( joinCommands, sizeof( joinCommands ), " ; cmd team red ; wait 20" );
+			Q_strcat( joinCommands, sizeof( joinCommands ), "cmd team red\nwait 20\n" );
 		}
 		for ( player = 2; player <= playerCount; player++ ) {
 			if ( gameType >= GT_TEAM ) {
-				Q_strcat( joinCommands, sizeof( joinCommands ), va( " ; cmd splitscreen_join %i %s ; wait 20", player, ( player & 1 ) ? "red" : "blue" ) );
+				Q_strcat( joinCommands, sizeof( joinCommands ), va( "cmd splitscreen_join %i %s\nwait 20\n", player, ( player & 1 ) ? "red" : "blue" ) );
 			} else {
-				Q_strcat( joinCommands, sizeof( joinCommands ), va( " ; cmd splitscreen_join %i ; wait 20", player ) );
+				Q_strcat( joinCommands, sizeof( joinCommands ), va( "cmd splitscreen_join %i\nwait 20\n", player ) );
 			}
 		}
-		Q_strcat( joinCommands, sizeof( joinCommands ), " ; splitscreen_menu\n" );
+		Q_strcat( joinCommands, sizeof( joinCommands ), "splitscreen_menu\n" );
 		trap->Cmd_ExecuteText( EXEC_APPEND, joinCommands );
 	}
 	trap->Key_SetCatcher( trap->Key_GetCatcher() & ~KEYCATCH_UI );
@@ -6929,11 +6930,7 @@ static void UI_RunMenuScript(char **args)
 		} else if (Q_stricmp(name, "closeingame") == 0) {
 			if ( trap->Cvar_VariableValue( "ui_splitScreenProfileTarget" ) > 1 ) {
 				int player = (int)trap->Cvar_VariableValue( "ui_splitScreenProfileTarget" );
-				if ( UI_SplitScreenPlayerHasNetworkClient( player ) ) {
-					trap->Cmd_ExecuteText( EXEC_APPEND, va( "splitnet_applyprofile %i\n", player ) );
-				} else {
-					trap->Cmd_ExecuteText( EXEC_APPEND, va( "cmd splitscreen_applyprofile %i\n", player ) );
-				}
+				UI_ApplySplitScreenPlayerProfile( player );
 				trap->Cvar_Set( "ui_splitScreenProfileTarget", "1" );
 			}
 			trap->Key_SetCatcher( trap->Key_GetCatcher() & ~KEYCATCH_UI );
@@ -9595,7 +9592,7 @@ qboolean UI_FeederSelection(float feederFloat, int index, itemDef_t *item)
 				if ( splitTarget == 1 ) {
 					UI_CopySplitScreenP1ProfileToGameCvars();
 				} else {
-					trap->Cmd_ExecuteText( EXEC_APPEND, va( "cmd splitscreen_applyprofile %i\n", splitTarget ) );
+					UI_ApplySplitScreenPlayerProfile( splitTarget );
 				}
 			} else {
 				trap->Cvar_Set( "model", uiInfo.q3HeadNames[index]);	//standard model
@@ -11048,6 +11045,8 @@ static void UI_CloseSplitScreenKeyboard( qboolean accept )
 				} else {
 					trap->Cmd_ExecuteText( EXEC_APPEND, va( "cmd splitscreen_join %i %s\n", ui_splitKeyboard.player, team ) );
 				}
+			} else {
+				trap->Cmd_ExecuteText( EXEC_APPEND, va( "echo Player %i command preset requires a split-screen network client: %s\n", ui_splitKeyboard.player, ui_splitKeyboard.text ) );
 			}
 			ui_splitKeyboard.active = qfalse;
 			return;
@@ -11061,11 +11060,7 @@ static void UI_CloseSplitScreenKeyboard( qboolean accept )
 			trap->Cvar_Set( "ui_Name", ui_splitKeyboard.text );
 		}
 		if ( profileCvar && ui_splitKeyboard.player > 1 ) {
-			if ( UI_SplitScreenPlayerHasNetworkClient( ui_splitKeyboard.player ) ) {
-				trap->Cmd_ExecuteText( EXEC_APPEND, va( "splitnet_applyprofile %i\n", ui_splitKeyboard.player ) );
-			} else {
-				trap->Cmd_ExecuteText( EXEC_APPEND, va( "cmd splitscreen_applyprofile %i\n", ui_splitKeyboard.player ) );
-			}
+			UI_ApplySplitScreenPlayerProfile( ui_splitKeyboard.player );
 		}
 	}
 
@@ -11811,6 +11806,19 @@ static void UI_SplitScreenSetActionRow( int row, int maxRow )
 static qboolean UI_SplitScreenPlayerHasNetworkClient( int player )
 {
 	return (qboolean)( player > 1 && trap->Cvar_VariableValue( va( "cl_splitScreenP%iClientNum", player ) ) >= 0 );
+}
+
+static void UI_ApplySplitScreenPlayerProfile( int player )
+{
+	if ( player <= 1 ) {
+		UI_CopySplitScreenP1ProfileToGameCvars();
+		return;
+	}
+	if ( UI_SplitScreenPlayerHasNetworkClient( player ) ) {
+		trap->Cmd_ExecuteText( EXEC_APPEND, va( "splitnet_applyprofile %i\n", player ) );
+	} else {
+		trap->Cmd_ExecuteText( EXEC_APPEND, va( "cmd splitscreen_applyprofile %i\n", player ) );
+	}
 }
 
 static void UI_SplitScreenSendPlayerCommand( int player, const char *command )

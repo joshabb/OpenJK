@@ -1078,8 +1078,10 @@ static void NET_EventForSocket( netsrc_t source, SOCKET socket, fd_set *fdr )
 
 			if(source == NS_CLIENT && com_sv_running->integer)
 				Com_RunAndTimeServerPacket(&from, &netmsg);
+#ifndef DEDICATED
 			else
 				CL_PacketEventFromSource(source, &from, &netmsg);
+#endif
 		}
 		else
 			break;
