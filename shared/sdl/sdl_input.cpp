@@ -31,7 +31,9 @@ static cvar_t *in_keyboardDebug     = NULL;
 
 static SDL_Joystick *stick = NULL;
 static SDL_Joystick *splitSticks[MAX_SPLITSCREEN_JOYSTICKS];
+#if !defined(_JK2EXE) && !defined(DEDICATED)
 static qboolean splitMenuButtonDown[MAX_SPLITSCREEN_JOYSTICKS];
+#endif
 
 static qboolean mouseAvailable = qfalse;
 static qboolean mouseActive = qfalse;
@@ -555,6 +557,7 @@ static int IN_SplitScreenInputJoystickIndex( int player )
 	return -1;
 }
 
+#if !defined(_JK2EXE) && !defined(DEDICATED)
 static int IN_SplitScreenPlayerForJoystickSlot( int joystickSlot )
 {
 	int player;
@@ -573,6 +576,7 @@ static int IN_SplitScreenPlayerForJoystickSlot( int joystickSlot )
 	}
 	return -1;
 }
+#endif
 
 static qboolean IN_SplitScreenLegacyJoystickFeedsPlayerOne( void )
 {
@@ -585,6 +589,7 @@ static qboolean IN_SplitScreenLegacyJoystickFeedsPlayerOne( void )
 	return (qboolean)( IN_SplitScreenInputJoystickIndex( 1 ) == in_joystickNo->integer );
 }
 
+#if !defined(_JK2EXE) && !defined(DEDICATED)
 static void IN_QueueSplitScreenUIKey( int player, int key, qboolean down )
 {
 	if ( !( Key_GetCatcher() & KEYCATCH_UI ) ) {
@@ -705,7 +710,9 @@ static void IN_UpdateSplitScreenControllerUIEvents( int player, int slot, SDL_Jo
 		state->oldaxes = axes;
 	}
 }
+#endif
 
+#if !defined(_JK2EXE) && !defined(DEDICATED)
 static void IN_UpdateSplitScreenControllerState( void )
 {
 	int slot;
@@ -775,6 +782,11 @@ static void IN_UpdateSplitScreenControllerState( void )
 		IN_UpdateSplitScreenControllerUIEvents( player, slot, controller );
 	}
 }
+#else
+static void IN_UpdateSplitScreenControllerState( void )
+{
+}
+#endif
 
 /*
 ===============
