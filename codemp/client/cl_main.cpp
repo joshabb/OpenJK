@@ -154,9 +154,14 @@ void CL_ServerStatusResponse( const netadr_t *from, msg_t *msg );
 static void CL_ShutdownRef( qboolean restarting );
 static void CL_SplitNetConnect_f( void );
 static void CL_SplitNetDisconnect_f( void );
+static void CL_SplitNetReliableCommand_f( void );
+static void CL_SplitNetApplyProfile_f( void );
 static void CL_SplitNetStatus_f( void );
 static int CL_SplitNetPlayerForSource( netsrc_t source );
 static netsrc_t CL_SplitNetSourceForPlayer( int player );
+static void CL_SplitNetStoreContext( int player );
+static void CL_SplitNetLoadContext( int player, clientActive_t *savedCl, clientConnection_t *savedClc );
+static void CL_SplitNetRestorePrimaryContext( const clientActive_t *savedCl, const clientConnection_t *savedClc );
 
 /*
 =======================================================================
@@ -1069,6 +1074,54 @@ static void CL_SplitNetBuildUserinfo( int player, char *info, int infoSize )
 		Info_SetValueForKey( info, "forcepowers", value );
 	}
 	Info_SetValueForKey( info, "challenge", va( "%i", cl_splitClients[player].connection.challenge ) );
+}
+
+static qboolean CL_SplitNetAddReliableCommand( int player, const char *cmd )
+{
+	splitScreenClient_t *split;
+	clientActive_t savedCl;
+	clientConnection_t savedClc;
+
+	player = CL_SplitNetClampPlayer( player );
+	split = &cl_splitClients[player];
+	if ( !split->enabled || split->state < CA_CONNECTED ) {
+		Com_Printf( "SplitNet P%i is not connected.\n", player );
+		return qfalse;
+	}
+
+	CL_SplitNetLoadContext( player, &savedCl, &savedClc );
+	CL_AddReliableCommand( cmd, qfalse );
+	CL_SplitNetStoreContext( player );
+	CL_SplitNetRestorePrimaryContext( &savedCl, &savedClc );
+	return qtrue;
+}
+
+static void CL_SplitNetReliableCommand_f( void )
+{
+	int player;
+
+	if ( Cmd_Argc() < 3 ) {
+		Com_Printf( "usage: splitnet_cmd <player 2-4> <server command>\n" );
+		return;
+	}
+
+	player = atoi( Cmd_Argv( 1 ) );
+	CL_SplitNetAddReliableCommand( player, Cmd_ArgsFrom( 2 ) );
+}
+
+static void CL_SplitNetApplyProfile_f( void )
+{
+	char info[MAX_INFO_STRING];
+	int player;
+
+	if ( Cmd_Argc() < 2 ) {
+		Com_Printf( "usage: splitnet_applyprofile <player 2-4>\n" );
+		return;
+	}
+
+	player = CL_SplitNetClampPlayer( atoi( Cmd_Argv( 1 ) ) );
+	CL_SplitNetBuildUserinfo( player, info, sizeof( info ) );
+	CL_SplitNetAddReliableCommand( player, va( "userinfo \"%s\"", info ) );
 }
 
 static void CL_SplitNetBeginConnect( int player, const char *server )
@@ -3279,6 +3332,8 @@ void CL_Init( void ) {
 	Cmd_AddCommand ("reconnect", CL_Reconnect_f, "Reconnect to current server" );
 	Cmd_AddCommand( "splitnet_connect", CL_SplitNetConnect_f, "Connect a split-screen player to a vanilla server" );
 	Cmd_AddCommand( "splitnet_disconnect", CL_SplitNetDisconnect_f, "Disconnect split-screen vanilla network players" );
+	Cmd_AddCommand( "splitnet_cmd", CL_SplitNetReliableCommand_f, "Send a reliable command from a split-screen vanilla network player" );
+	Cmd_AddCommand( "splitnet_applyprofile", CL_SplitNetApplyProfile_f, "Send a split-screen vanilla network player's userinfo" );
 	Cmd_AddCommand( "splitnet_status", CL_SplitNetStatus_f, "Show split-screen vanilla network connection state" );
 	Cmd_AddCommand ("localservers", CL_LocalServers_f, "Query LAN for local servers" );
 	Cmd_AddCommand ("rcon", CL_Rcon_f, "Execute commands remotely to a server" );
@@ -3355,6 +3410,8 @@ void CL_Shutdown( void ) {
 	Cmd_RemoveCommand ("reconnect");
 	Cmd_RemoveCommand( "splitnet_connect" );
 	Cmd_RemoveCommand( "splitnet_disconnect" );
+	Cmd_RemoveCommand( "splitnet_cmd" );
+	Cmd_RemoveCommand( "splitnet_applyprofile" );
 	Cmd_RemoveCommand( "splitnet_status" );
 	Cmd_RemoveCommand ("localservers");
 	Cmd_RemoveCommand ("globalservers");
