@@ -1798,10 +1798,61 @@ void CL_SendCmd( void ) {
 		if ( cl_showSend->integer ) {
 			Com_Printf( ". " );
 		}
+		CL_SplitNetSendCmds();
 		return;
 	}
 
 	CL_WritePacket();
+	CL_SplitNetSendCmds();
+}
+
+void CL_SplitNetSendCmds( void )
+{
+	int player;
+
+	if ( !cl_splitScreen || !cl_splitScreen->integer ) {
+		return;
+	}
+
+	for ( player = 2; player <= MAX_SPLITSCREEN_PLAYERS; player++ ) {
+		splitScreenClient_t *split = &cl_splitClients[player];
+		clientActive_t savedCl;
+		clientConnection_t savedClc;
+		int cmdNum;
+
+		if ( !split->enabled || split->state < CA_CONNECTED ) {
+			continue;
+		}
+		if ( split->connection.demoplaying || split->connection.netchan.remoteAddress.type == NA_BAD ) {
+			continue;
+		}
+		if ( split->connection.netchan.unsentFragments ) {
+			clientConnection_t fragmentClc = clc;
+			clc = split->connection;
+			CL_Netchan_TransmitNextFragment( &clc.netchan );
+			split->connection = clc;
+			clc = fragmentClc;
+			continue;
+		}
+
+		savedCl = cl;
+		savedClc = clc;
+		cl = split->active;
+		clc = split->connection;
+
+		cl.cmdNumber++;
+		cmdNum = cl.cmdNumber & CMD_MASK;
+		CL_SplitScreenCreateCmd( player, &cl.cmds[cmdNum] );
+
+		if ( CL_ReadyToSendPacket() ) {
+			CL_WritePacket();
+		}
+
+		split->active = cl;
+		split->connection = clc;
+		cl = savedCl;
+		clc = savedClc;
+	}
 }
 
 static const cmdList_t inputCmds[] =
@@ -1942,6 +1993,7 @@ void CL_InitInput( void ) {
 		cl_splitScreenAltAttackButton[splitPlayer] = Cvar_Get( va( "cl_splitScreenP%iAltAttackButton", splitPlayer ), "1", CVAR_ARCHIVE_ND, va( "Player %i controller alt attack button.", splitPlayer ) );
 		cl_splitScreenUseButton[splitPlayer] = Cvar_Get( va( "cl_splitScreenP%iUseButton", splitPlayer ), "2", CVAR_ARCHIVE_ND, va( "Player %i controller use button.", splitPlayer ) );
 		cl_splitScreenJumpButton[splitPlayer] = Cvar_Get( va( "cl_splitScreenP%iJumpButton", splitPlayer ), "3", CVAR_ARCHIVE_ND, va( "Player %i controller jump button.", splitPlayer ) );
+		Cvar_Get( va( "cl_splitScreenP%iClientNum", splitPlayer ), "-1", 0, va( "Player %i split-screen network client slot.", splitPlayer ) );
 	}
 	Cvar_Get( "ui_splitScreenP1Name", "Padawan", CVAR_ARCHIVE_ND, "Split-screen Player 1 display name." );
 	Cvar_Get( "ui_splitScreenP1Model", DEFAULT_MODEL"/default", CVAR_ARCHIVE_ND, "Split-screen Player 1 model/skin." );

@@ -2493,11 +2493,29 @@ static void CG_ApplySplitScreenRect( int viewIndex ) {
 }
 
 static int CG_FindSplitScreenClient( int player ) {
+	char configuredName[MAX_QPATH];
+	char cleanConfiguredName[MAX_QPATH];
+	char clientNumBuffer[16];
+	int configuredClientNum;
 	int i;
+
+	trap->Cvar_VariableStringBuffer( va( "cl_splitScreenP%iClientNum", player ), clientNumBuffer, sizeof( clientNumBuffer ) );
+	configuredClientNum = atoi( clientNumBuffer );
+	if ( configuredClientNum >= 0 && configuredClientNum < MAX_CLIENTS && cgs.clientinfo[configuredClientNum].infoValid ) {
+		return configuredClientNum;
+	}
+
+	configuredName[0] = '\0';
+	trap->Cvar_VariableStringBuffer( va( "ui_splitScreenP%iName", player ), configuredName, sizeof( configuredName ) );
+	Q_strncpyz( cleanConfiguredName, configuredName, sizeof( cleanConfiguredName ) );
+	Q_CleanStr( cleanConfiguredName );
 
 	for ( i = 0; i < MAX_CLIENTS; i++ ) {
 		if ( !cgs.clientinfo[i].infoValid ) {
 			continue;
+		}
+		if ( configuredName[0] && ( !Q_stricmp( cgs.clientinfo[i].name, configuredName ) || !Q_stricmp( cgs.clientinfo[i].cleanname, cleanConfiguredName ) ) ) {
+			return i;
 		}
 		if ( !Q_stricmp( cgs.clientinfo[i].cleanname, va( "SplitPlayer%i", player ) ) || !Q_stricmp( cgs.clientinfo[i].name, va( "SplitPlayer%i", player ) ) ) {
 			return i;

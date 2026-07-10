@@ -258,6 +258,7 @@ typedef struct splitScreenClient_s {
 	int					player;
 	int					qport;
 	connstate_t			state;
+	qboolean			sentInitialJoin;
 	char				servername[MAX_OSPATH];
 	clientActive_t		active;
 	clientConnection_t	connection;
@@ -472,8 +473,9 @@ void CL_AddReliableCommand( const char *cmd, qboolean isDisconnectCmd );
 
 void CL_StartHunkUsers( void );
 void CL_SplitNetCheckForResend( void );
-qboolean CL_SplitNetConnectionlessPacket( const netadr_t *from, msg_t *msg );
+qboolean CL_SplitNetConnectionlessPacket( netsrc_t source, const netadr_t *from, msg_t *msg );
 void CL_SplitNetDisconnectAll( void );
+qboolean CL_SplitNetPacketEvent( netsrc_t source, const netadr_t *from, msg_t *msg );
 
 qboolean CL_GetSnapshot( int snapshotNumber, snapshot_t *snapshot );
 qboolean CL_GetDefaultState( int index, entityState_t *state );
@@ -524,6 +526,7 @@ void CL_SendCmd (void);
 void CL_ClearState (void);
 void CL_SplitScreenSetControllerAxis( int player, int axis, int value );
 void CL_SplitScreenSetControllerButton( int player, int button, qboolean pressed );
+void CL_SplitNetSendCmds( void );
 
 void CL_WritePacket( void );
 

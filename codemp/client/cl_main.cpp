@@ -155,6 +155,8 @@ static void CL_ShutdownRef( qboolean restarting );
 static void CL_SplitNetConnect_f( void );
 static void CL_SplitNetDisconnect_f( void );
 static void CL_SplitNetStatus_f( void );
+static int CL_SplitNetPlayerForSource( netsrc_t source );
+static netsrc_t CL_SplitNetSourceForPlayer( int player );
 
 /*
 =======================================================================
@@ -1016,6 +1018,20 @@ static int CL_SplitNetClampPlayer( int player )
 	return player;
 }
 
+static netsrc_t CL_SplitNetSourceForPlayer( int player )
+{
+	switch ( player ) {
+		case 2:
+			return NS_CLIENT2;
+		case 3:
+			return NS_CLIENT3;
+		case 4:
+			return NS_CLIENT4;
+		default:
+			return NS_CLIENT;
+	}
+}
+
 static void CL_SplitNetBuildUserinfo( int player, char *info, int infoSize )
 {
 	int qport = ( (int)Cvar_VariableValue( "net_qport" ) + player - 1 ) & 0xffff;
@@ -1040,6 +1056,18 @@ static void CL_SplitNetBuildUserinfo( int player, char *info, int infoSize )
 	if ( value[0] ) {
 		Info_SetValueForKey( info, "saber2", value );
 	}
+	Cvar_VariableStringBuffer( va( "ui_splitScreenP%iColor1", player ), value, sizeof( value ) );
+	if ( value[0] ) {
+		Info_SetValueForKey( info, "color1", value );
+	}
+	Cvar_VariableStringBuffer( va( "ui_splitScreenP%iColor2", player ), value, sizeof( value ) );
+	if ( value[0] ) {
+		Info_SetValueForKey( info, "color2", value );
+	}
+	Cvar_VariableStringBuffer( va( "ui_splitScreenP%iForcePowers", player ), value, sizeof( value ) );
+	if ( value[0] ) {
+		Info_SetValueForKey( info, "forcepowers", value );
+	}
 	Info_SetValueForKey( info, "challenge", va( "%i", cl_splitClients[player].connection.challenge ) );
 }
 
@@ -1047,6 +1075,7 @@ static void CL_SplitNetBeginConnect( int player, const char *server )
 {
 	splitScreenClient_t *split;
 	const char *serverString;
+	char serverBuffer[MAX_OSPATH];
 
 	player = CL_SplitNetClampPlayer( player );
 	split = &cl_splitClients[player];
@@ -1055,6 +1084,10 @@ static void CL_SplitNetBeginConnect( int player, const char *server )
 	split->enabled = qtrue;
 	split->wantsConnect = qtrue;
 	split->qport = ( (int)Cvar_VariableValue( "net_qport" ) + player - 1 ) & 0xffff;
+	if ( !Q_stricmp( server, "localhost" ) || !Q_stricmp( server, "loopback" ) ) {
+		Com_sprintf( serverBuffer, sizeof( serverBuffer ), "127.0.0.1:%i", Cvar_VariableIntegerValue( "net_port" ) );
+		server = serverBuffer;
+	}
 	Q_strncpyz( split->servername, server, sizeof( split->servername ) );
 
 	if ( !NET_StringToAdr( split->servername, &split->connection.serverAddress ) ) {
@@ -1101,8 +1134,10 @@ static void CL_SplitNetDisconnectPlayer( int player )
 		return;
 	}
 	if ( split->state >= CA_CONNECTED ) {
-		NET_OutOfBandPrint( NS_CLIENT, &split->connection.serverAddress, "disconnect" );
+		NET_OutOfBandPrint( CL_SplitNetSourceForPlayer( player ), &split->connection.serverAddress, "disconnect" );
 	}
+	Cvar_Set( va( "ui_splitScreenP%iJoined", player ), "0" );
+	Cvar_Set( va( "cl_splitScreenP%iClientNum", player ), "-1" );
 	Com_Memset( split, 0, sizeof( *split ) );
 }
 
@@ -1130,8 +1165,34 @@ static void CL_SplitNetStatus_f( void )
 
 	for ( player = 2; player <= MAX_SPLITSCREEN_PLAYERS; player++ ) {
 		splitScreenClient_t *split = &cl_splitClients[player];
-		Com_Printf( "SplitNet P%i: enabled=%i state=%i qport=%i server=%s packets=%i\n",
-			player, split->enabled, split->state, split->qport, split->servername, split->connection.connectPacketCount );
+		Com_Printf( "SplitNet P%i: enabled=%i state=%i qport=%i clientNum=%i snap=%i server=%s packets=%i\n",
+			player, split->enabled, split->state, split->qport, split->connection.clientNum,
+			split->active.snap.valid, split->servername, split->connection.connectPacketCount );
+	}
+}
+
+static void CL_SplitNetCheckTimeouts( void )
+{
+	int player;
+
+	if ( CL_CheckPaused() && sv_paused->integer ) {
+		return;
+	}
+
+	for ( player = 2; player <= MAX_SPLITSCREEN_PLAYERS; player++ ) {
+		splitScreenClient_t *split = &cl_splitClients[player];
+
+		if ( !split->enabled || split->state < CA_CONNECTED ) {
+			continue;
+		}
+		if ( cls.realtime - split->connection.lastPacketTime <= cl_timeout->value * 1000 ) {
+			split->active.timeoutcount = 0;
+			continue;
+		}
+		if ( ++split->active.timeoutcount > 5 ) {
+			Com_Printf( "SplitNet P%i timed out\n", player );
+			CL_SplitNetDisconnectPlayer( player );
+		}
 	}
 }
 
@@ -1783,20 +1844,21 @@ void CL_SplitNetCheckForResend( void )
 
 		if ( split->state == CA_CONNECTING ) {
 			Com_sprintf( data, sizeof( data ), "getchallenge %d", split->connection.challenge );
-			NET_OutOfBandPrint( NS_CLIENT, &split->connection.serverAddress, data );
+			NET_OutOfBandPrint( CL_SplitNetSourceForPlayer( player ), &split->connection.serverAddress, data );
 		} else {
 			CL_SplitNetBuildUserinfo( player, info, sizeof( info ) );
 			Com_sprintf( data, sizeof( data ), "connect \"%s\"", info );
-			NET_OutOfBandData( NS_CLIENT, &split->connection.serverAddress, (byte *)data, strlen( data ) );
+			NET_OutOfBandData( CL_SplitNetSourceForPlayer( player ), &split->connection.serverAddress, (byte *)data, strlen( data ) );
 		}
 	}
 }
 
-qboolean CL_SplitNetConnectionlessPacket( const netadr_t *from, msg_t *msg )
+qboolean CL_SplitNetConnectionlessPacket( netsrc_t source, const netadr_t *from, msg_t *msg )
 {
 	char *cmd = Cmd_Argv( 0 );
 	int player;
 	int challenge = 0;
+	int sourcePlayer = CL_SplitNetPlayerForSource( source );
 
 	(void)msg;
 
@@ -1807,6 +1869,9 @@ qboolean CL_SplitNetConnectionlessPacket( const netadr_t *from, msg_t *msg )
 	for ( player = 2; player <= MAX_SPLITSCREEN_PLAYERS; player++ ) {
 		splitScreenClient_t *split = &cl_splitClients[player];
 
+		if ( sourcePlayer && sourcePlayer != player ) {
+			continue;
+		}
 		if ( !split->enabled ) {
 			continue;
 		}
@@ -1842,12 +1907,101 @@ qboolean CL_SplitNetConnectionlessPacket( const netadr_t *from, msg_t *msg )
 			if ( !NET_CompareAdr( from, &split->connection.serverAddress ) ) {
 				continue;
 			}
-			Netchan_Setup( NS_CLIENT, &split->connection.netchan, from, split->qport );
+			Netchan_Setup( CL_SplitNetSourceForPlayer( player ), &split->connection.netchan, from, split->qport );
 			split->state = CA_CONNECTED;
 			split->connection.lastPacketSentTime = -9999;
+			split->connection.lastPacketTime = cls.realtime;
 			Com_Printf( "SplitNet P%i connected to %s\n", player, NET_AdrToString( from ) );
 			return qtrue;
 		}
+	}
+
+	return qfalse;
+}
+
+static void CL_SplitNetStoreContext( int player )
+{
+	cl_splitClients[player].active = cl;
+	cl_splitClients[player].connection = clc;
+}
+
+static void CL_SplitNetLoadContext( int player, clientActive_t *savedCl, clientConnection_t *savedClc )
+{
+	*savedCl = cl;
+	*savedClc = clc;
+	cl = cl_splitClients[player].active;
+	clc = cl_splitClients[player].connection;
+}
+
+static void CL_SplitNetRestorePrimaryContext( const clientActive_t *savedCl, const clientConnection_t *savedClc )
+{
+	cl = *savedCl;
+	clc = *savedClc;
+}
+
+static int CL_SplitNetPlayerForSource( netsrc_t source )
+{
+	switch ( source ) {
+		case NS_CLIENT2:
+			return 2;
+		case NS_CLIENT3:
+			return 3;
+		case NS_CLIENT4:
+			return 4;
+		default:
+			return 0;
+	}
+}
+
+qboolean CL_SplitNetPacketEvent( netsrc_t source, const netadr_t *from, msg_t *msg )
+{
+	int player;
+	int headerBytes;
+
+	for ( player = 2; player <= MAX_SPLITSCREEN_PLAYERS; player++ ) {
+		splitScreenClient_t *split = &cl_splitClients[player];
+		clientActive_t savedCl;
+		clientConnection_t savedClc;
+
+		if ( source != NS_CLIENT && CL_SplitNetPlayerForSource( source ) != player ) {
+			continue;
+		}
+		if ( !split->enabled || split->state < CA_CONNECTED ) {
+			continue;
+		}
+		if ( !NET_CompareAdr( from, &split->connection.netchan.remoteAddress ) ) {
+			continue;
+		}
+
+		CL_SplitNetLoadContext( player, &savedCl, &savedClc );
+		clc.lastPacketTime = cls.realtime;
+		if ( !CL_Netchan_Process( &clc.netchan, msg ) ) {
+			CL_SplitNetStoreContext( player );
+			CL_SplitNetRestorePrimaryContext( &savedCl, &savedClc );
+			return qtrue;
+		}
+
+		headerBytes = msg->readcount;
+		clc.serverMessageSequence = LittleLong( *(int *)msg->data );
+		clc.lastPacketTime = cls.realtime;
+		CL_ParseServerMessage( msg );
+
+		if ( clc.demorecording && !clc.demowaiting ) {
+			CL_WriteDemoMessage( msg, headerBytes );
+		}
+		if ( split->state == CA_CONNECTED && cl.snap.valid ) {
+			split->state = CA_ACTIVE;
+			Cvar_Set( va( "ui_splitScreenP%iJoined", player ), "1" );
+			Cvar_Set( va( "cl_splitScreenP%iClientNum", player ), va( "%i", clc.clientNum ) );
+			if ( !split->sentInitialJoin ) {
+				CL_AddReliableCommand( "team free", qfalse );
+				split->sentInitialJoin = qtrue;
+			}
+		}
+
+		CL_SplitNetStoreContext( player );
+		CL_SplitNetRestorePrimaryContext( &savedCl, &savedClc );
+		return qtrue;
 	}
 
 	return qfalse;
@@ -2129,7 +2283,7 @@ CL_ConnectionlessPacket
 Responses to broadcasts, etc
 =================
 */
-void CL_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
+void CL_ConnectionlessPacket( netsrc_t source, const netadr_t *from, msg_t *msg ) {
 	char	*s;
 	char	*c;
 	int challenge = 0;
@@ -2147,7 +2301,7 @@ void CL_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 		Com_Printf( "CL packet %s: %s\n", NET_AdrToString( from ), c );
 	}
 
-	if ( CL_SplitNetConnectionlessPacket( from, msg ) ) {
+	if ( CL_SplitNetConnectionlessPacket( source, from, msg ) ) {
 		return;
 	}
 
@@ -2281,12 +2435,18 @@ A packet has arrived from the main event loop
 =================
 */
 void CL_PacketEvent( const netadr_t *from, msg_t *msg ) {
+	CL_PacketEventFromSource( NS_CLIENT, from, msg );
+}
+
+void CL_PacketEventFromSource( netsrc_t source, const netadr_t *from, msg_t *msg ) {
 	int		headerBytes;
 
-	clc.lastPacketTime = cls.realtime;
+	if ( source == NS_CLIENT ) {
+		clc.lastPacketTime = cls.realtime;
+	}
 
 	if ( msg->cursize >= 4 && *(int *)msg->data == -1 ) {
-		CL_ConnectionlessPacket( from, msg );
+		CL_ConnectionlessPacket( source, from, msg );
 		return;
 	}
 
@@ -2296,6 +2456,10 @@ void CL_PacketEvent( const netadr_t *from, msg_t *msg ) {
 
 	if ( msg->cursize < 4 ) {
 		Com_Printf ("%s: Runt packet\n",NET_AdrToString( from ));
+		return;
+	}
+
+	if ( CL_SplitNetPacketEvent( source, from, msg ) ) {
 		return;
 	}
 
@@ -2471,6 +2635,7 @@ void CL_Frame ( int msec ) {
 	// if we haven't gotten a packet in a long time,
 	// drop the connection
 	CL_CheckTimeout();
+	CL_SplitNetCheckTimeouts();
 
 	// send intentions now
 	CL_SendCmd();
