@@ -3568,21 +3568,33 @@ static void Cmd_SplitScreenJoin_f( gentity_t *ent ) {
 	int clientNum;
 	int player;
 	gentity_t *split;
+	char teamArg[MAX_TOKEN_CHARS] = {0};
+	const char *teamCommand;
 
 	if ( !ent || !ent->client || !ent->client->pers.localClient ) {
 		return;
 	}
 
 	player = G_SplitScreenPlayerArg( 1, 2 );
+	if ( trap->Argc() >= 3 ) {
+		trap->Argv( 2, teamArg, sizeof( teamArg ) );
+	}
+	teamCommand = teamArg[0] ? teamArg : G_SplitScreenDefaultTeamCommand( ent );
+
 	clientNum = G_FindSplitScreenClient( player );
 	if ( clientNum == -1 ) {
-		G_CreateSplitScreenClient( ent, player );
+		clientNum = G_CreateSplitScreenClient( ent, player );
 	} else {
-		split = &g_entities[clientNum];
-		SetTeam( split, (char *)G_SplitScreenDefaultTeamCommand( ent ) );
-		trap->Cvar_Set( va( "ui_splitScreenP%iJoined", player ), "1" );
 		trap->SendServerCommand( ent->s.number, va( "print \"Split-screen: Player %i joined\n\"", player ) );
 	}
+
+	if ( clientNum == -1 ) {
+		return;
+	}
+
+	split = &g_entities[clientNum];
+	SetTeam( split, (char *)teamCommand );
+	trap->Cvar_Set( va( "ui_splitScreenP%iJoined", player ), "1" );
 }
 
 static void Cmd_SplitScreenSpectate_f( gentity_t *ent ) {
@@ -3631,6 +3643,134 @@ static void Cmd_SplitScreenLeave_f( gentity_t *ent ) {
 	trap->BotFreeClient( clientNum );
 	trap->Cvar_Set( va( "ui_splitScreenP%iJoined", player ), "0" );
 	trap->SendServerCommand( ent->s.number, va( "print \"Split-screen: Player %i left\n\"", player ) );
+}
+
+static void G_SplitScreenPrintStatus( gentity_t *owner, int player, int clientNum ) {
+	gentity_t *split;
+	const char *message;
+
+	if ( clientNum < 0 || clientNum >= MAX_CLIENTS ) {
+		message = va( "SplitStatus: p%i client=-1 connected=0\n", player );
+		trap->SendServerCommand( owner->s.number, va( "print \"%s\"", message ) );
+		G_LogPrintf( "%s", message );
+		return;
+	}
+
+	split = &g_entities[clientNum];
+	if ( !split->client || split->client->pers.connected != CON_CONNECTED ) {
+		message = va( "SplitStatus: p%i client=%i connected=0\n", player, clientNum );
+		trap->SendServerCommand( owner->s.number, va( "print \"%s\"", message ) );
+		G_LogPrintf( "%s", message );
+		return;
+	}
+
+	message = va( "SplitStatus: p%i client=%i connected=1 team=%s spectator=%i health=%i score=%i deaths=%i spawn=%i origin=%s name=%s\n",
+		player,
+		clientNum,
+		TeamName( split->client->sess.sessionTeam ),
+		split->client->sess.spectatorState,
+		split->health,
+		split->client->ps.persistant[PERS_SCORE],
+		split->client->ps.persistant[PERS_KILLED],
+		split->client->ps.persistant[PERS_SPAWN_COUNT],
+		vtos( split->r.currentOrigin ),
+		split->client->pers.netname );
+	trap->SendServerCommand( owner->s.number, va( "print \"%s\"", message ) );
+	G_LogPrintf( "%s", message );
+}
+
+static void Cmd_SplitScreenStatus_f( gentity_t *ent ) {
+	int player;
+	int endPlayer;
+
+	if ( !ent || !ent->client || !ent->client->pers.localClient ) {
+		return;
+	}
+
+	player = G_SplitScreenPlayerArg( 1, 0 );
+	if ( player >= 2 && player <= 4 ) {
+		G_SplitScreenPrintStatus( ent, player, G_FindSplitScreenClient( player ) );
+		return;
+	}
+
+	for ( endPlayer = 2; endPlayer <= 4; endPlayer++ ) {
+		G_SplitScreenPrintStatus( ent, endPlayer, G_FindSplitScreenClient( endPlayer ) );
+	}
+}
+
+static void Cmd_SplitScreenPlace_f( gentity_t *ent ) {
+	int clientNum;
+	int player;
+	float distance = 96.0f;
+	float yawCandidates[4] = { 0.0f, 90.0f, 180.0f, 270.0f };
+	vec3_t forward;
+	vec3_t baseOrigin;
+	vec3_t ownerAngles;
+	vec3_t splitAngles;
+	vec3_t splitOrigin;
+	vec3_t testOrigin;
+	vec3_t downOrigin;
+	vec3_t mins = { -15.0f, -15.0f, 0.0f };
+	vec3_t maxs = { 15.0f, 15.0f, 72.0f };
+	trace_t trace;
+	char arg[MAX_TOKEN_CHARS];
+	int i;
+	qboolean foundSpot = qfalse;
+
+	if ( !ent || !ent->client || !ent->client->pers.localClient ) {
+		return;
+	}
+
+	player = G_SplitScreenPlayerArg( 1, 2 );
+	clientNum = G_FindSplitScreenClient( player );
+	if ( clientNum < 0 ) {
+		trap->SendServerCommand( ent->s.number, va( "print \"Split-screen: Player %i is not joined\n\"", player ) );
+		return;
+	}
+
+	if ( trap->Argc() >= 3 ) {
+		trap->Argv( 2, arg, sizeof( arg ) );
+		distance = Com_Clamp( 64.0f, 192.0f, atof( arg ) );
+	}
+
+	VectorCopy( ent->client->ps.origin, baseOrigin );
+
+	for ( i = 0; i < 4; i++ ) {
+		VectorClear( ownerAngles );
+		ownerAngles[YAW] = yawCandidates[i];
+		AngleVectors( ownerAngles, forward, NULL, NULL );
+
+		VectorMA( baseOrigin, distance, forward, testOrigin );
+		testOrigin[2] += 32.0f;
+		trap->Trace( &trace, testOrigin, mins, maxs, testOrigin, ent->s.number, MASK_PLAYERSOLID, qfalse, 0, 0 );
+		if ( trace.startsolid || trace.allsolid ) {
+			continue;
+		}
+
+		VectorCopy( testOrigin, downOrigin );
+		downOrigin[2] -= 4096.0f;
+		trap->Trace( &trace, testOrigin, mins, maxs, downOrigin, ent->s.number, MASK_PLAYERSOLID, qfalse, 0, 0 );
+		if ( trace.fraction >= 1.0f ) {
+			continue;
+		}
+
+		VectorCopy( trace.endpos, splitOrigin );
+		foundSpot = qtrue;
+		break;
+	}
+
+	if ( !foundSpot ) {
+		trap->SendServerCommand( ent->s.number, va( "print \"Split-screen: no safe placement found for Player %i\n\"", player ) );
+		return;
+	}
+
+	SetClientViewAngle( ent, ownerAngles );
+
+	VectorClear( splitAngles );
+	splitAngles[YAW] = AngleNormalize360( ownerAngles[YAW] + 180.0f );
+
+	TeleportPlayer( &g_entities[clientNum], splitOrigin, splitAngles );
+	trap->SendServerCommand( ent->s.number, va( "print \"Split-screen: Player %i placed near Player 1\n\"", player ) );
 }
 
 static qboolean G_SplitScreenHandleDeadClientCommand( gentity_t *split, const usercmd_t *cmd ) {
@@ -3763,7 +3903,9 @@ command_t commands[] = {
 	{ "splitscreen_cmd",	Cmd_SplitScreenCmd_f,		0 },
 	{ "splitscreen_join",	Cmd_SplitScreenJoin_f,		0 },
 	{ "splitscreen_leave",	Cmd_SplitScreenLeave_f,		0 },
+	{ "splitscreen_place",	Cmd_SplitScreenPlace_f,		CMD_CHEAT|CMD_NOINTERMISSION },
 	{ "splitscreen_spectate",	Cmd_SplitScreenSpectate_f,	0 },
+	{ "splitscreen_status",	Cmd_SplitScreenStatus_f,		0 },
 	{ "team",				Cmd_Team_f,					CMD_NOINTERMISSION },
 //	{ "teamtask",			Cmd_TeamTask_f,				CMD_NOINTERMISSION },
 	{ "teamvote",			Cmd_TeamVote_f,				CMD_NOINTERMISSION },

@@ -1193,6 +1193,7 @@ void CL_InitKeyCommands( void ) {
 	Cmd_SetCommandCompletionFunc( "unbind", Key_CompleteUnbind );
 	Cmd_AddCommand( "unbindall", Key_Unbindall_f, "Delete all key bindings" );
 	Cmd_AddCommand( "bindlist", Key_Bindlist_f, "Show all bindings in the console" );
+	Cmd_AddCommand( "closemenu", [](){ UIVM_SetActiveMenu( UIMENU_NONE ); }, "Close the active menu" );
 	Cmd_AddCommand( "splitscreen_menu", [](){ UIVM_SetActiveMenu( UIMENU_SPLITSCREEN ); }, "Open the local split-screen player setup menu" );
 }
 
