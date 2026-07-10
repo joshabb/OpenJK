@@ -63,9 +63,19 @@ Con_ToggleConsole_f
 ================
 */
 static void Con_ToggleConsoleForPlayer( int player ) {
+	qboolean consoleOpen;
+
 	// closing a full screen console restarts the demo loop
 	if ( cls.state == CA_DISCONNECTED && Key_GetCatcher( ) == KEYCATCH_CONSOLE ) {
 		CL_StartDemoLoop();
+		return;
+	}
+
+	consoleOpen = (qboolean)( Key_GetCatcher( ) & KEYCATCH_CONSOLE );
+	if ( consoleOpen && Key_GetConsolePlayer() != player ) {
+		Key_SetConsolePlayer( player );
+		g_consoleField.widthInChars = g_console_field_width;
+		Con_ClearNotify ();
 		return;
 	}
 
@@ -90,6 +100,64 @@ void Con_ToggleConsole_f (void) {
 static void Con_ToggleConsole2_f( void ) { Con_ToggleConsoleForPlayer( 2 ); }
 static void Con_ToggleConsole3_f( void ) { Con_ToggleConsoleForPlayer( 3 ); }
 static void Con_ToggleConsole4_f( void ) { Con_ToggleConsoleForPlayer( 4 ); }
+
+static int Con_SplitScreenPlayerCount( void )
+{
+	int playerCount = Cvar_VariableIntegerValue( "ui_splitScreenPlayerCount" );
+
+	if ( playerCount < 2 ) {
+		playerCount = 2;
+	} else if ( playerCount > MAX_SPLITSCREEN_PLAYERS ) {
+		playerCount = MAX_SPLITSCREEN_PLAYERS;
+	}
+
+	return playerCount;
+}
+
+static qboolean Con_SplitScreenViewportForPlayer( int player, float *x, float *y, float *w, float *h )
+{
+	int playerCount;
+
+	if ( !Cvar_VariableIntegerValue( "cl_splitScreen" ) ) {
+		return qfalse;
+	}
+
+	playerCount = Con_SplitScreenPlayerCount();
+	if ( player < 1 ) {
+		player = 1;
+	} else if ( player > playerCount ) {
+		player = playerCount;
+	}
+
+	if ( playerCount <= 2 ) {
+		*x = 0.0f;
+		*y = player == 1 ? 0.0f : ( SCREEN_HEIGHT / 2.0f );
+		*w = SCREEN_WIDTH;
+		*h = SCREEN_HEIGHT / 2.0f;
+		return qtrue;
+	}
+
+	if ( playerCount == 3 ) {
+		if ( player == 1 ) {
+			*x = 0.0f;
+			*y = 0.0f;
+			*w = SCREEN_WIDTH;
+			*h = SCREEN_HEIGHT / 2.0f;
+			return qtrue;
+		}
+		*x = player == 2 ? 0.0f : ( SCREEN_WIDTH / 2.0f );
+		*y = SCREEN_HEIGHT / 2.0f;
+		*w = SCREEN_WIDTH / 2.0f;
+		*h = SCREEN_HEIGHT / 2.0f;
+		return qtrue;
+	}
+
+	*w = SCREEN_WIDTH / 2.0f;
+	*h = SCREEN_HEIGHT / 2.0f;
+	*x = ( ( player - 1 ) % 2 ) ? ( SCREEN_WIDTH / 2.0f ) : 0.0f;
+	*y = ( player > 2 ) ? ( SCREEN_HEIGHT / 2.0f ) : 0.0f;
+	return qtrue;
+}
 
 /*
 ===================
@@ -917,7 +985,7 @@ void Con_DrawSolidConsole( float frac ) {
 	// draw the bottom bar and version number
 
 	re->SetColor( console_color );
-	re->DrawStretchPic( 0, y, SCREEN_WIDTH, 2, 0, 0, 0, 0, cls.whiteShader );
+	SCR_FillRect( 0, y, SCREEN_WIDTH, 2, console_color );
 
 	i = strlen( JK_VERSION );
 
@@ -1030,6 +1098,12 @@ Con_DrawConsole
 ==================
 */
 void Con_DrawConsole( void ) {
+	float viewportX;
+	float viewportY;
+	float viewportW;
+	float viewportH;
+	qboolean splitViewport;
+
 	// check for console width changes from a vid mode change
 	Con_CheckResize ();
 
@@ -1042,7 +1116,14 @@ void Con_DrawConsole( void ) {
 	}
 
 	if ( con.displayFrac ) {
+		splitViewport = Con_SplitScreenViewportForPlayer( Key_GetConsolePlayer(), &viewportX, &viewportY, &viewportW, &viewportH );
+		if ( splitViewport ) {
+			SCR_SetViewportTransform( qtrue, viewportX, viewportY, viewportW, viewportH );
+		}
 		Con_DrawSolidConsole( con.displayFrac );
+		if ( splitViewport ) {
+			SCR_SetViewportTransform( qfalse, 0.0f, 0.0f, SCREEN_WIDTH, SCREEN_HEIGHT );
+		}
 	} else {
 		// draw notify lines
 		if ( cls.state == CA_ACTIVE ) {

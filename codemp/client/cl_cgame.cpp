@@ -385,6 +385,10 @@ qboolean CL_GetServerCommand( int serverCommandNumber ) {
 		// reliable commands then the client never got those first reliable commands
 		if ( clc.demoplaying )
 			return qfalse;
+		if ( cl_splitNetParsingPacket || ( Cvar_VariableIntegerValue( "cl_splitScreen" ) && !Cvar_VariableIntegerValue( "cl_splitScreenLocalCmds" ) ) ) {
+			clc.lastExecutedServerCommand = clc.serverCommandSequence;
+			return qfalse;
+		}
 
 		while (i < MAX_RELIABLE_COMMANDS)
 		{ //spew out the reliable command buffer

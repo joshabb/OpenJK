@@ -120,6 +120,7 @@ clientActive_t		cl;
 clientConnection_t	clc;
 clientStatic_t		cls;
 splitScreenClient_t	cl_splitClients[MAX_SPLITSCREEN_PLAYERS + 1];
+qboolean			cl_splitNetParsingPacket = qfalse;
 
 netadr_t rcon_address;
 
@@ -1132,6 +1133,7 @@ static void CL_SplitNetBeginConnect( int player, const char *server )
 
 	player = CL_SplitNetClampPlayer( player );
 	split = &cl_splitClients[player];
+	Cvar_Set( "cl_splitScreenLocalCmds", "0" );
 	Com_Memset( split, 0, sizeof( *split ) );
 	split->player = player;
 	split->enabled = qtrue;
@@ -2015,6 +2017,8 @@ qboolean CL_SplitNetPacketEvent( netsrc_t source, const netadr_t *from, msg_t *m
 		splitScreenClient_t *split = &cl_splitClients[player];
 		clientActive_t savedCl;
 		clientConnection_t savedClc;
+		connstate_t savedState;
+		qboolean savedCgameStarted;
 
 		if ( source != NS_CLIENT && CL_SplitNetPlayerForSource( source ) != player ) {
 			continue;
@@ -2026,18 +2030,25 @@ qboolean CL_SplitNetPacketEvent( netsrc_t source, const netadr_t *from, msg_t *m
 			continue;
 		}
 
+		savedState = cls.state;
+		savedCgameStarted = cls.cgameStarted;
 		CL_SplitNetLoadContext( player, &savedCl, &savedClc );
 		clc.lastPacketTime = cls.realtime;
 		if ( !CL_Netchan_Process( &clc.netchan, msg ) ) {
 			CL_SplitNetStoreContext( player );
 			CL_SplitNetRestorePrimaryContext( &savedCl, &savedClc );
+			cls.state = savedState;
+			cls.cgameStarted = savedCgameStarted;
 			return qtrue;
 		}
 
 		headerBytes = msg->readcount;
 		clc.serverMessageSequence = LittleLong( *(int *)msg->data );
 		clc.lastPacketTime = cls.realtime;
+		cl_splitNetParsingPacket = qtrue;
 		CL_ParseServerMessage( msg );
+		cl_splitNetParsingPacket = qfalse;
+		clc.lastExecutedServerCommand = clc.serverCommandSequence;
 
 		if ( clc.demorecording && !clc.demowaiting ) {
 			CL_WriteDemoMessage( msg, headerBytes );
@@ -2054,6 +2065,8 @@ qboolean CL_SplitNetPacketEvent( netsrc_t source, const netadr_t *from, msg_t *m
 
 		CL_SplitNetStoreContext( player );
 		CL_SplitNetRestorePrimaryContext( &savedCl, &savedClc );
+		cls.state = savedState;
+		cls.cgameStarted = savedCgameStarted;
 		return qtrue;
 	}
 

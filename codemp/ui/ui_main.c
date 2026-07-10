@@ -6542,12 +6542,14 @@ static void UI_StartSplitScreenServer( void )
 	UI_CopySplitScreenP1ProfileToGameCvars();
 
 	if ( !Q_stricmp( sessionType, "server" ) ) {
+		trap->Cvar_Set( "cl_splitScreenLocalCmds", "0" );
 		trap->Key_SetCatcher( KEYCATCH_UI );
 		Menus_CloseAll();
 		Menus_ActivateByName( "joinserver" );
 		return;
 	}
 
+	trap->Cvar_Set( "cl_splitScreenLocalCmds", "1" );
 	trap->Cvar_Set( "dedicated", "0" );
 	trap->Cvar_Set( "sv_maxClients", "8" );
 	trap->Cvar_Set( "g_gametype", va( "%i", gameType ) );

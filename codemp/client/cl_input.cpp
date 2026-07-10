@@ -49,6 +49,7 @@ static cvar_t	*cl_splitScreenAttackButton[5] = { NULL, NULL, NULL, NULL, NULL };
 static cvar_t	*cl_splitScreenAltAttackButton[5] = { NULL, NULL, NULL, NULL, NULL };
 static cvar_t	*cl_splitScreenUseButton[5] = { NULL, NULL, NULL, NULL, NULL };
 static cvar_t	*cl_splitScreenJumpButton[5] = { NULL, NULL, NULL, NULL, NULL };
+static cvar_t	*cl_splitScreenLocalCmds = NULL;
 static vec3_t cl_splitScreenViewangles[5];
 static qboolean cl_splitScreenViewInitialized[5] = { qfalse, qfalse, qfalse, qfalse, qfalse };
 static int cl_splitScreenNextCmdTime[5] = { 0, 0, 0, 0, 0 };
@@ -991,6 +992,61 @@ void CL_SplitScreenSetControllerButton( int player, int button, qboolean pressed
 	cl_splitScreenControllerButtons[player][button] = pressed;
 }
 
+static void CL_SplitInputAxis_f( void )
+{
+	int player;
+	int axis;
+	int value;
+
+	if ( Cmd_Argc() < 3 || Cmd_Argc() > 4 ) {
+		Com_Printf( "usage: splitinput_axis <player 2-4> <axis> [value -127..127]\n" );
+		return;
+	}
+
+	player = atoi( Cmd_Argv( 1 ) );
+	axis = atoi( Cmd_Argv( 2 ) );
+	value = Cmd_Argc() == 4 ? atoi( Cmd_Argv( 3 ) ) : 0;
+	value = (int)Com_Clamp( -127.0f, 127.0f, value );
+	CL_SplitScreenSetControllerAxis( player, axis, value );
+}
+
+static void CL_SplitInputButton_f( void )
+{
+	int player;
+	int button;
+	int pressed;
+
+	if ( Cmd_Argc() < 3 || Cmd_Argc() > 4 ) {
+		Com_Printf( "usage: splitinput_button <player 2-4> <button> [0|1]\n" );
+		return;
+	}
+
+	player = atoi( Cmd_Argv( 1 ) );
+	button = atoi( Cmd_Argv( 2 ) );
+	pressed = Cmd_Argc() == 4 ? atoi( Cmd_Argv( 3 ) ) : 0;
+	CL_SplitScreenSetControllerButton( player, button, pressed ? qtrue : qfalse );
+}
+
+static void CL_SplitInputClear_f( void )
+{
+	int player;
+	int axis;
+	int button;
+
+	if ( Cmd_Argc() != 2 ) {
+		Com_Printf( "usage: splitinput_clear <player 2-4>\n" );
+		return;
+	}
+
+	player = atoi( Cmd_Argv( 1 ) );
+	for ( axis = 0; axis < MAX_JOYSTICK_AXIS; axis++ ) {
+		CL_SplitScreenSetControllerAxis( player, axis, 0 );
+	}
+	for ( button = 0; button < (int)ARRAY_LEN( cl_splitScreenControllerButtons[player] ); button++ ) {
+		CL_SplitScreenSetControllerButton( player, button, qfalse );
+	}
+}
+
 /*
 =================
 CL_JoystickMove
@@ -1142,7 +1198,10 @@ static void CL_SplitScreenSendPlayerCmd( int player ) {
 	int hz;
 	int interval;
 
-	if ( !cl_splitScreen->integer || !in_joystick->integer || cls.state != CA_ACTIVE ) {
+	if ( !cl_splitScreen->integer || !in_joystick->integer || !cl_splitScreenLocalCmds->integer || cls.state != CA_ACTIVE ) {
+		return;
+	}
+	if ( cl_splitClients[player].enabled && cl_splitClients[player].state >= CA_CONNECTED ) {
 		return;
 	}
 
@@ -1965,6 +2024,9 @@ static const cmdList_t inputCmds[] =
 	{ "automap_button", "Show/hide automap", IN_AutoMapButton, NULL },
 	{ "automap_toggle", "Show/hide radar", IN_AutoMapToggle, NULL },
 	{ "voicechat", "Open voice chat menu", IN_VoiceChatButton, NULL },
+	{ "splitinput_axis", "Inject a split-screen controller axis value", CL_SplitInputAxis_f, NULL },
+	{ "splitinput_button", "Inject a split-screen controller button value", CL_SplitInputButton_f, NULL },
+	{ "splitinput_clear", "Clear injected split-screen controller state", CL_SplitInputClear_f, NULL },
 	{ NULL, NULL, NULL, NULL }
 };
 
@@ -1981,6 +2043,7 @@ void CL_InitInput( void ) {
 	cl_nodelta = Cvar_Get ("cl_nodelta", "0", 0);
 	cl_debugMove = Cvar_Get ("cl_debugMove", "0", 0);
 	cl_splitScreen = Cvar_Get( "cl_splitScreen", "0", CVAR_ARCHIVE_ND, "Enable local split-screen command generation." );
+	cl_splitScreenLocalCmds = Cvar_Get( "cl_splitScreenLocalCmds", "1", 0, "Send legacy local-server split-screen commands." );
 	for ( splitPlayer = 2; splitPlayer <= 4; splitPlayer++ ) {
 		cl_splitScreenInvert[splitPlayer] = Cvar_Get( va( "cl_splitScreenP%iInvert", splitPlayer ), "0", CVAR_ARCHIVE_ND, va( "Invert Player %i controller pitch.", splitPlayer ) );
 		cl_splitScreenSensitivity[splitPlayer] = Cvar_Get( va( "cl_splitScreenP%iSensitivity", splitPlayer ), "140", CVAR_ARCHIVE_ND, va( "Player %i controller look sensitivity.", splitPlayer ) );
