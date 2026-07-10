@@ -10875,10 +10875,42 @@ typedef struct splitScreenKeyboard_s {
 	qboolean active;
 	int player;
 	int cursor;
-	char text[MAX_NAME_LENGTH];
+	qboolean cvarMode;
+	char targetCvar[64];
+	char targetLabel[64];
+	char text[MAX_CVAR_VALUE_STRING];
 } splitScreenKeyboard_t;
 
 static splitScreenKeyboard_t ui_splitKeyboard;
+
+typedef struct splitScreenKeyboardCvar_s {
+	const char *label;
+	const char *cvarFormat;
+} splitScreenKeyboardCvar_t;
+
+static const splitScreenKeyboardCvar_t ui_splitKeyboardCvars[] = {
+	{ "Name", "ui_splitScreenP%iName" },
+	{ "Model", "ui_splitScreenP%iModel" },
+	{ "Saber 1", "ui_splitScreenP%iSaber1" },
+	{ "Saber 2", "ui_splitScreenP%iSaber2" },
+	{ "Blade 1", "ui_splitScreenP%iColor1" },
+	{ "Blade 2", "ui_splitScreenP%iColor2" },
+	{ "Force Powers", "ui_splitScreenP%iForcePowers" },
+	{ "Char Red", "ui_splitScreenP%iCharRed" },
+	{ "Char Green", "ui_splitScreenP%iCharGreen" },
+	{ "Char Blue", "ui_splitScreenP%iCharBlue" },
+	{ "Sensitivity", "cl_splitScreenP%iSensitivity" },
+	{ "Invert Y", "cl_splitScreenP%iInvert" },
+	{ "Cmd Hz", "cl_splitScreenP%iCmdHz" },
+	{ "Move Side Axis", "cl_splitScreenP%iMoveSideAxis" },
+	{ "Move Forward Axis", "cl_splitScreenP%iMoveForwardAxis" },
+	{ "Look Yaw Axis", "cl_splitScreenP%iLookYawAxis" },
+	{ "Look Pitch Axis", "cl_splitScreenP%iLookPitchAxis" },
+	{ "Attack Button", "cl_splitScreenP%iAttackButton" },
+	{ "Alt Attack Button", "cl_splitScreenP%iAltAttackButton" },
+	{ "Use Button", "cl_splitScreenP%iUseButton" },
+	{ "Jump Button", "cl_splitScreenP%iJumpButton" }
+};
 
 static const char *UI_SplitScreenKeyboardKey( int index )
 {
@@ -10886,8 +10918,8 @@ static const char *UI_SplitScreenKeyboardKey( int index )
 		"A", "B", "C", "D", "E", "F", "G", "H", "I", "J",
 		"K", "L", "M", "N", "O", "P", "Q", "R", "S", "T",
 		"U", "V", "W", "X", "Y", "Z", "0", "1", "2", "3",
-		"4", "5", "6", "7", "8", "9", "-", "_", "Space", "Delete",
-		"Clear", "Done"
+		"4", "5", "6", "7", "8", "9", "-", "_", "/", ".", ":",
+		"Space", "Delete", "Cvars", "Clear", "Done"
 	};
 
 	if ( index < 0 || index >= (int)ARRAY_LEN( keys ) ) {
@@ -10897,6 +10929,41 @@ static const char *UI_SplitScreenKeyboardKey( int index )
 	return keys[index];
 }
 
+static int UI_SplitScreenKeyboardKeyCount( void )
+{
+	return 46;
+}
+
+static int UI_SplitScreenKeyboardCols( void )
+{
+	return 10;
+}
+
+static void UI_SplitScreenKeyboardSetTarget( int player, const char *label, const char *cvarName )
+{
+	memset( ui_splitKeyboard.text, 0, sizeof( ui_splitKeyboard.text ) );
+	Q_strncpyz( ui_splitKeyboard.targetLabel, label, sizeof( ui_splitKeyboard.targetLabel ) );
+	Q_strncpyz( ui_splitKeyboard.targetCvar, cvarName, sizeof( ui_splitKeyboard.targetCvar ) );
+	Q_strncpyz( ui_splitKeyboard.text, UI_Cvar_VariableString( cvarName ), sizeof( ui_splitKeyboard.text ) );
+	if ( !ui_splitKeyboard.text[0] && !Q_stricmp( label, "Name" ) ) {
+		Q_strncpyz( ui_splitKeyboard.text, va( "SplitPlayer%i", player ), sizeof( ui_splitKeyboard.text ) );
+	}
+}
+
+static void UI_SplitScreenKeyboardSelectCvar( int index )
+{
+	char cvarName[64];
+
+	if ( index < 0 || index >= (int)ARRAY_LEN( ui_splitKeyboardCvars ) ) {
+		return;
+	}
+
+	Com_sprintf( cvarName, sizeof( cvarName ), ui_splitKeyboardCvars[index].cvarFormat, ui_splitKeyboard.player );
+	UI_SplitScreenKeyboardSetTarget( ui_splitKeyboard.player, ui_splitKeyboardCvars[index].label, cvarName );
+	ui_splitKeyboard.cvarMode = qfalse;
+	ui_splitKeyboard.cursor = 0;
+}
+
 static qboolean UI_SplitScreenKeyboardIsNameItem( itemDef_t *item )
 {
 	return item && item->type == ITEM_TYPE_EDITFIELD && item->cvar && !Q_stricmp( item->cvar, "ui_Name" );
@@ -10904,23 +10971,35 @@ static qboolean UI_SplitScreenKeyboardIsNameItem( itemDef_t *item )
 
 static void UI_OpenSplitScreenKeyboard( int player )
 {
-	const char *nameCvar = va( "ui_splitScreenP%iName", player );
+	char nameCvar[64];
 
 	memset( &ui_splitKeyboard, 0, sizeof( ui_splitKeyboard ) );
 	ui_splitKeyboard.active = qtrue;
 	ui_splitKeyboard.player = player;
-	Q_strncpyz( ui_splitKeyboard.text, UI_Cvar_VariableString( nameCvar ), sizeof( ui_splitKeyboard.text ) );
-	if ( !ui_splitKeyboard.text[0] ) {
-		Q_strncpyz( ui_splitKeyboard.text, va( "SplitPlayer%i", player ), sizeof( ui_splitKeyboard.text ) );
-	}
+	Com_sprintf( nameCvar, sizeof( nameCvar ), "ui_splitScreenP%iName", player );
+	UI_SplitScreenKeyboardSetTarget( player, "Name", nameCvar );
 }
 
 static void UI_CloseSplitScreenKeyboard( qboolean accept )
 {
 	if ( accept && ui_splitKeyboard.player >= 1 && ui_splitKeyboard.player <= 4 ) {
-		trap->Cvar_Set( va( "ui_splitScreenP%iName", ui_splitKeyboard.player ), ui_splitKeyboard.text );
+		char profilePrefix[32];
+		qboolean profileCvar;
+
+		Com_sprintf( profilePrefix, sizeof( profilePrefix ), "ui_splitScreenP%i", ui_splitKeyboard.player );
+		profileCvar = !Q_stricmpn( ui_splitKeyboard.targetCvar, profilePrefix, strlen( profilePrefix ) );
+		trap->Cvar_Set( ui_splitKeyboard.targetCvar, ui_splitKeyboard.text );
 		trap->Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", ui_splitKeyboard.player ) );
-		trap->Cvar_Set( "ui_Name", ui_splitKeyboard.text );
+		if ( !Q_stricmp( ui_splitKeyboard.targetCvar, va( "ui_splitScreenP%iName", ui_splitKeyboard.player ) ) ) {
+			trap->Cvar_Set( "ui_Name", ui_splitKeyboard.text );
+		}
+		if ( profileCvar && ui_splitKeyboard.player > 1 ) {
+			if ( UI_SplitScreenPlayerHasNetworkClient( ui_splitKeyboard.player ) ) {
+				trap->Cmd_ExecuteText( EXEC_APPEND, va( "splitnet_applyprofile %i\n", ui_splitKeyboard.player ) );
+			} else {
+				trap->Cmd_ExecuteText( EXEC_APPEND, va( "cmd splitscreen_applyprofile %i\n", ui_splitKeyboard.player ) );
+			}
+		}
 	}
 
 	ui_splitKeyboard.active = qfalse;
@@ -10930,7 +11009,7 @@ static void UI_SplitScreenKeyboardAppend( const char *text )
 {
 	int len = strlen( ui_splitKeyboard.text );
 
-	if ( len >= MAX_NAME_LENGTH - 1 ) {
+	if ( len >= (int)sizeof( ui_splitKeyboard.text ) - 1 ) {
 		return;
 	}
 
@@ -10957,8 +11036,8 @@ static void UI_SplitScreenKeyboardBackspace( void )
 
 static qboolean UI_HandleSplitScreenKeyboardKey( int key, qboolean down )
 {
-	const int cols = 10;
-	const int keyCount = 42;
+	const int cols = ui_splitKeyboard.cvarMode ? 3 : UI_SplitScreenKeyboardCols();
+	const int keyCount = ui_splitKeyboard.cvarMode ? (int)ARRAY_LEN( ui_splitKeyboardCvars ) : UI_SplitScreenKeyboardKeyCount();
 
 	if ( !ui_splitKeyboard.active ) {
 		return qfalse;
@@ -10996,6 +11075,11 @@ static qboolean UI_HandleSplitScreenKeyboardKey( int key, qboolean down )
 	case A_BACKSPACE:
 	case A_DELETE:
 	case A_MOUSE2:
+		if ( ui_splitKeyboard.cvarMode ) {
+			ui_splitKeyboard.cvarMode = qfalse;
+			ui_splitKeyboard.cursor = 0;
+			return qtrue;
+		}
 		UI_SplitScreenKeyboardBackspace();
 		return qtrue;
 	case A_ESCAPE:
@@ -11005,9 +11089,19 @@ static qboolean UI_HandleSplitScreenKeyboardKey( int key, qboolean down )
 	case A_KP_ENTER:
 	case A_MOUSE1:
 		{
-			const char *keyText = UI_SplitScreenKeyboardKey( ui_splitKeyboard.cursor );
+			const char *keyText;
+
+			if ( ui_splitKeyboard.cvarMode ) {
+				UI_SplitScreenKeyboardSelectCvar( ui_splitKeyboard.cursor );
+				return qtrue;
+			}
+
+			keyText = UI_SplitScreenKeyboardKey( ui_splitKeyboard.cursor );
 			if ( !Q_stricmp( keyText, "Delete" ) ) {
 				UI_SplitScreenKeyboardBackspace();
+			} else if ( !Q_stricmp( keyText, "Cvars" ) ) {
+				ui_splitKeyboard.cvarMode = qtrue;
+				ui_splitKeyboard.cursor = 0;
 			} else if ( !Q_stricmp( keyText, "Clear" ) ) {
 				ui_splitKeyboard.text[0] = '\0';
 			} else if ( !Q_stricmp( keyText, "Done" ) ) {
@@ -11018,7 +11112,7 @@ static qboolean UI_HandleSplitScreenKeyboardKey( int key, qboolean down )
 		}
 		return qtrue;
 	default:
-		if ( key == A_SPACE || ( key >= A_CAP_A && key <= A_CAP_Z ) || ( key >= A_0 && key <= A_9 ) ) {
+		if ( !ui_splitKeyboard.cvarMode && ( key == A_SPACE || ( key >= A_CAP_A && key <= A_CAP_Z ) || ( key >= A_0 && key <= A_9 ) ) ) {
 			char typed[2];
 			typed[0] = key == A_SPACE ? ' ' : (char)( key - A_CAP_A + 'A' );
 			typed[1] = '\0';
@@ -11036,8 +11130,8 @@ static qboolean UI_HandleSplitScreenKeyboardKey( int key, qboolean down )
 
 static void UI_PaintSplitScreenKeyboard( void )
 {
-	const int cols = 10;
-	const int keyCount = 42;
+	const int cols = ui_splitKeyboard.cvarMode ? 3 : UI_SplitScreenKeyboardCols();
+	const int keyCount = ui_splitKeyboard.cvarMode ? (int)ARRAY_LEN( ui_splitKeyboardCvars ) : UI_SplitScreenKeyboardKeyCount();
 	float viewportX;
 	float viewportY;
 	float viewportW;
@@ -11073,29 +11167,34 @@ static void UI_PaintSplitScreenKeyboard( void )
 
 	UI_FillRect( panelX, panelY, panelW, panelH, panel );
 	_UI_DrawRect( panelX, panelY, panelW, panelH, 1.0f, border );
-	Text_Paint( panelX + 22.0f, panelY + 38.0f, .68f, gold, va( "PLAYER %i NAME", ui_splitKeyboard.player ), 0, 0, ITEM_TEXTSTYLE_SHADOWEDMORE, FONT_MEDIUM );
+	Text_Paint( panelX + 22.0f, panelY + 38.0f, .68f, gold, va( "PLAYER %i %s", ui_splitKeyboard.player, ui_splitKeyboard.cvarMode ? "CVARS" : ui_splitKeyboard.targetLabel ), 0, 0, ITEM_TEXTSTYLE_SHADOWEDMORE, FONT_MEDIUM );
 	UI_FillRect( panelX + 22.0f, panelY + 58.0f, panelW - 44.0f, 42.0f, keyBg );
 	_UI_DrawRect( panelX + 22.0f, panelY + 58.0f, panelW - 44.0f, 42.0f, 1.0f, border );
-	Text_Paint( panelX + 36.0f, panelY + 88.0f, .70f, white, ui_splitKeyboard.text[0] ? ui_splitKeyboard.text : " ", 0, 0, ITEM_TEXTSTYLE_SHADOWED, FONT_MEDIUM );
+	Text_Paint( panelX + 36.0f, panelY + 88.0f, .54f, white, ui_splitKeyboard.cvarMode ? "Choose a cvar to edit" : ( ui_splitKeyboard.text[0] ? ui_splitKeyboard.text : " " ), 0, 0, ITEM_TEXTSTYLE_SHADOWED, FONT_MEDIUM );
 
 	for ( i = 0; i < keyCount; i++ ) {
+		const int specialStart = UI_SplitScreenKeyboardKeyCount() - 5;
 		int row = i / cols;
 		int col = i % cols;
 		float x = panelX + 16.0f + col * ( keyW + gap );
 		float y = panelY + 116.0f + row * ( keyH + gap );
 		float w = keyW;
-		const char *label = UI_SplitScreenKeyboardKey( i );
+		const char *label = ui_splitKeyboard.cvarMode ? ui_splitKeyboardCvars[i].label : UI_SplitScreenKeyboardKey( i );
+		float labelScale = ui_splitKeyboard.cvarMode ? .36f : .50f;
 
-		if ( i >= 38 ) {
-			row = 4;
-			w = ( panelW - 32.0f - gap * 3.0f ) / 4.0f;
-			x = panelX + 16.0f + ( i - 38 ) * ( w + gap );
+		if ( ui_splitKeyboard.cvarMode ) {
+			w = ( panelW - 32.0f - gap * ( cols - 1 ) ) / cols;
+			x = panelX + 16.0f + col * ( w + gap );
+		} else if ( i >= specialStart ) {
+			row = specialStart / cols + 1;
+			w = ( panelW - 32.0f - gap * 4.0f ) / 5.0f;
+			x = panelX + 16.0f + ( i - specialStart ) * ( w + gap );
 			y = panelY + 116.0f + row * ( keyH + gap );
 		}
 
 		UI_FillRect( x, y, w, keyH, i == ui_splitKeyboard.cursor ? selected : keyBg );
 		_UI_DrawRect( x, y, w, keyH, 1.0f, border );
-		Text_Paint( x + 10.0f, y + 24.0f, .50f, i == ui_splitKeyboard.cursor ? gold : white, label, 0, 0, ITEM_TEXTSTYLE_SHADOWED, FONT_MEDIUM );
+		Text_Paint( x + 8.0f, y + 24.0f, labelScale, i == ui_splitKeyboard.cursor ? gold : white, label, 0, 0, ITEM_TEXTSTYLE_SHADOWED, FONT_MEDIUM );
 	}
 
 	UI_SetViewportTransform( qfalse, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT );
