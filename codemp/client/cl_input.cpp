@@ -55,6 +55,7 @@ static qboolean cl_splitScreenViewInitialized[5] = { qfalse, qfalse, qfalse, qfa
 static int cl_splitScreenNextCmdTime[5] = { 0, 0, 0, 0, 0 };
 static int cl_splitScreenControllerAxis[5][MAX_JOYSTICK_AXIS];
 static qboolean cl_splitScreenControllerButtons[5][16];
+static qboolean cl_splitScreenConsoleChordDown[5];
 
 #ifdef VEH_CONTROL_SCHEME_4
 #define	OVERRIDE_MOUSE_SENSITIVITY 5.0f//20.0f = 180 degree turn in one mouse swipe across keyboard
@@ -990,6 +991,15 @@ void CL_SplitScreenSetControllerButton( int player, int button, qboolean pressed
 		return;
 	}
 	cl_splitScreenControllerButtons[player][button] = pressed;
+
+	if ( cl_splitScreenControllerButtons[player][6] && cl_splitScreenControllerButtons[player][7] ) {
+		if ( !cl_splitScreenConsoleChordDown[player] ) {
+			Con_ToggleConsoleForPlayer( player );
+			cl_splitScreenConsoleChordDown[player] = qtrue;
+		}
+	} else {
+		cl_splitScreenConsoleChordDown[player] = qfalse;
+	}
 }
 
 static void CL_SplitInputAxis_f( void )
@@ -1045,6 +1055,7 @@ static void CL_SplitInputClear_f( void )
 	for ( button = 0; button < (int)ARRAY_LEN( cl_splitScreenControllerButtons[player] ); button++ ) {
 		CL_SplitScreenSetControllerButton( player, button, qfalse );
 	}
+	cl_splitScreenConsoleChordDown[player] = qfalse;
 }
 
 /*

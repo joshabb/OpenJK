@@ -62,7 +62,7 @@ vec4_t	console_color = {0.509f, 0.609f, 0.847f, 1.0f};
 Con_ToggleConsole_f
 ================
 */
-static void Con_ToggleConsoleForPlayer( int player ) {
+void Con_ToggleConsoleForPlayer( int player ) {
 	qboolean consoleOpen;
 
 	// closing a full screen console restarts the demo loop

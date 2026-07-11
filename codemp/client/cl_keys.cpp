@@ -310,6 +310,56 @@ static int Key_TranslateSplitScreenMenuKey( int key )
 	}
 }
 
+static int Key_SplitScreenPrimaryControllerPlayer( void )
+{
+	char inputName[32];
+	int player;
+	int playerCount;
+
+	if ( !Cvar_VariableIntegerValue( "cl_splitScreen" ) ) {
+		return 1;
+	}
+
+	playerCount = Cvar_VariableIntegerValue( "ui_splitScreenPlayerCount" );
+	if ( playerCount < 2 ) {
+		playerCount = 2;
+	} else if ( playerCount > MAX_SPLITSCREEN_PLAYERS ) {
+		playerCount = MAX_SPLITSCREEN_PLAYERS;
+	}
+
+	for ( player = 1; player <= playerCount; player++ ) {
+		Cvar_VariableStringBuffer( va( "ui_splitScreenP%iInput", player ), inputName, sizeof( inputName ) );
+		if ( !Q_stricmp( inputName, "controller1" ) ) {
+			return player;
+		}
+	}
+
+	return 1;
+}
+
+static qboolean Key_HandleSplitScreenConsoleChord( int key, qboolean down )
+{
+	static qboolean consoleChordDown = qfalse;
+
+	if ( !Cvar_VariableIntegerValue( "cl_splitScreen" ) || ( key != A_JOY6 && key != A_JOY7 ) ) {
+		return qfalse;
+	}
+
+	if ( down && kg.keys[A_JOY6].down && kg.keys[A_JOY7].down ) {
+		if ( !consoleChordDown ) {
+			Con_ToggleConsoleForPlayer( Key_SplitScreenPrimaryControllerPlayer() );
+			consoleChordDown = qtrue;
+		}
+		return qtrue;
+	}
+
+	if ( !down ) {
+		consoleChordDown = qfalse;
+	}
+
+	return qfalse;
+}
+
 int Key_GetConsolePlayer( void )
 {
 	return consolePlayer;
@@ -1657,6 +1707,10 @@ void CL_KeyDownEvent( int key, unsigned time )
 		return;
 	}
 
+	if ( Key_HandleSplitScreenConsoleChord( key, qtrue ) ) {
+		return;
+	}
+
 	// keys can still be used for bound actions
 	if ( cls.state == CA_CINEMATIC && !Key_GetCatcher() ) {
 		if ( !com_cameraMode->integer ) {
@@ -1748,6 +1802,10 @@ void CL_KeyUpEvent( int key, unsigned time )
 	kg.keys[keynames[key].upper].repeats = 0;
 	kg.keys[keynames[key].upper].down = qfalse;
 	kg.keyDownCount--;
+
+	if ( Key_HandleSplitScreenConsoleChord( key, qfalse ) ) {
+		return;
+	}
 
 	if (kg.keyDownCount <= 0) {
 		kg.anykeydown = qfalse;
