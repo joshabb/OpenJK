@@ -16,11 +16,28 @@
 #include <IOKit/hidsystem/IOHIDUserDevice.h>
 #include <dispatch/dispatch.h>
 #include <mach/mach_time.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#define GAMEPAD_MAGIC 0x4f4a4750u
+#define GAMEPAD_VERSION 1
+#define GAMEPAD_AXES 6
+#define GAMEPAD_TAP_USEC 120000
+
+typedef struct gamepad_packet_s {
+	uint32_t magic;
+	uint8_t version;
+	uint8_t controller;
+	uint16_t buttons;
+	int16_t axes[GAMEPAD_AXES];
+} gamepad_packet_t;
+
+static gamepad_packet_t gamepads[4];
 
 typedef struct key_map_s {
 	const char *name;
@@ -56,7 +73,10 @@ static void usage( const char *argv0 )
 		"  key <name> <down|up|tap>\n"
 		"  mouse <dx> <dy>\n"
 		"  click <left|right>\n"
-		"  gamepad-demo <ms>   # create an external virtual HID gamepad and send a short input sequence\n"
+		"  gamepad <1-4> axis <0-5> <-32768..32767>\n"
+		"  gamepad <1-4> button <0-15> <down|up|tap>\n"
+		"  gamepad-demo <ms>   # drive three SDL gamepads through the localhost bridge\n"
+		"  hid-gamepad-demo <ms> # restricted IOHIDUserDevice backend\n"
 		"\n"
 		"example:\n"
 		"  %s wait 1000 key w down wait 250 key w up mouse 30 0 click left\n",
@@ -230,7 +250,7 @@ static void send_gamepad_report( IOHIDUserDeviceRef device, uint16_t buttons, in
 	IOHIDUserDeviceHandleReportWithTimeStamp( device, mach_absolute_time(), report, sizeof( report ) );
 }
 
-static int gamepad_demo( int duration_ms )
+static int hid_gamepad_demo( int duration_ms )
 {
 	IOHIDUserDeviceRef device = create_virtual_gamepad();
 
@@ -257,6 +277,65 @@ static int gamepad_demo( int duration_ms )
 
 	IOHIDUserDeviceCancel( device );
 	CFRelease( device );
+	return 0;
+}
+
+static int bridge_port( void )
+{
+	const char *text = getenv( "OPENJK_VIRTUAL_GAMEPAD_PORT" );
+	int port = text && text[0] ? atoi( text ) : 29180;
+	return port >= 1024 && port <= 65535 ? port : 29180;
+}
+
+static int send_bridge_gamepad( int controller )
+{
+	struct sockaddr_in address;
+	gamepad_packet_t packet = gamepads[controller];
+	int sock;
+	int i;
+	ssize_t sent;
+
+	packet.magic = htonl( GAMEPAD_MAGIC );
+	packet.version = GAMEPAD_VERSION;
+	packet.controller = (uint8_t)controller;
+	packet.buttons = htons( packet.buttons );
+	for ( i = 0; i < GAMEPAD_AXES; ++i ) {
+		packet.axes[i] = (int16_t)htons( (uint16_t)packet.axes[i] );
+	}
+
+	sock = socket( AF_INET, SOCK_DGRAM, 0 );
+	if ( sock < 0 ) {
+		perror( "gamepad bridge socket" );
+		return 5;
+	}
+	memset( &address, 0, sizeof( address ) );
+	address.sin_family = AF_INET;
+	address.sin_addr.s_addr = htonl( INADDR_LOOPBACK );
+	address.sin_port = htons( (uint16_t)bridge_port() );
+	sent = sendto( sock, &packet, sizeof( packet ), 0, (struct sockaddr *)&address, sizeof( address ) );
+	close( sock );
+	if ( sent != sizeof( packet ) ) {
+		perror( "gamepad bridge send" );
+		return 5;
+	}
+	return 0;
+}
+
+static int bridge_gamepad_demo( int duration_ms )
+{
+	int controller;
+
+	for ( controller = 0; controller < 3; ++controller ) {
+		gamepads[controller].axes[controller % 2] = (int16_t)( 12000 + controller * 4000 );
+		gamepads[controller].buttons = (uint16_t)( 1u << controller );
+		send_bridge_gamepad( controller );
+	}
+	usleep( (useconds_t)duration_ms * 1000 );
+	for ( controller = 0; controller < 3; ++controller ) {
+		memset( &gamepads[controller], 0, sizeof( gamepads[controller] ) );
+		send_bridge_gamepad( controller );
+	}
+	printf( "Drove three external SDL gamepads through 127.0.0.1:%d.\n", bridge_port() );
 	return 0;
 }
 
@@ -358,7 +437,68 @@ int main( int argc, char **argv )
 				return 2;
 			}
 			duration_ms = atoi( argv[i++] );
-			return gamepad_demo( duration_ms );
+			return bridge_gamepad_demo( duration_ms );
+		}
+
+		if ( streq( cmd, "hid-gamepad-demo" ) ) {
+			int duration_ms;
+			if ( i >= argc ) {
+				usage( argv[0] );
+				return 2;
+			}
+			duration_ms = atoi( argv[i++] );
+			return hid_gamepad_demo( duration_ms );
+		}
+
+		if ( streq( cmd, "gamepad" ) ) {
+			int controller;
+			int control;
+			const char *kind;
+			const char *value;
+			if ( i + 3 >= argc ) {
+				usage( argv[0] );
+				return 2;
+			}
+			controller = atoi( argv[i++] ) - 1;
+			kind = argv[i++];
+			control = atoi( argv[i++] );
+			value = argv[i++];
+			if ( controller < 0 || controller >= 4 ) {
+				fprintf( stderr, "gamepad number must be 1 through 4\n" );
+				return 2;
+			}
+			if ( streq( kind, "axis" ) ) {
+				int axisValue = atoi( value );
+				if ( control < 0 || control >= GAMEPAD_AXES || axisValue < -32768 || axisValue > 32767 ) {
+					fprintf( stderr, "axis must be 0 through 5 and value -32768 through 32767\n" );
+					return 2;
+				}
+				gamepads[controller].axes[control] = (int16_t)axisValue;
+				if ( send_bridge_gamepad( controller ) != 0 ) return 5;
+			} else if ( streq( kind, "button" ) ) {
+				if ( control < 0 || control >= 16 ) {
+					fprintf( stderr, "button must be 0 through 15\n" );
+					return 2;
+				}
+				if ( streq( value, "down" ) || streq( value, "tap" ) ) {
+					gamepads[controller].buttons |= (uint16_t)( 1u << control );
+				} else if ( streq( value, "up" ) ) {
+					gamepads[controller].buttons &= (uint16_t)~( 1u << control );
+				} else {
+					fprintf( stderr, "button action must be down, up, or tap\n" );
+					return 2;
+				}
+				if ( send_bridge_gamepad( controller ) != 0 ) return 5;
+				if ( streq( value, "tap" ) ) {
+					usleep( GAMEPAD_TAP_USEC );
+					gamepads[controller].buttons &= (uint16_t)~( 1u << control );
+					if ( send_bridge_gamepad( controller ) != 0 ) return 5;
+				}
+			} else {
+				fprintf( stderr, "gamepad control must be axis or button\n" );
+				return 2;
+			}
+			continue;
 		}
 
 		fprintf( stderr, "unknown command: %s\n", cmd );

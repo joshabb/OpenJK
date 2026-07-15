@@ -9,6 +9,8 @@ tested.
 
 ```sh
 tests/splitscreen/run_splitscreen_qa.sh
+tests/splitscreen/run_external_gamepad_qa.sh
+tests/splitscreen/run_external_menu_qa.sh
 ```
 
 Useful overrides:
@@ -52,31 +54,34 @@ tests/splitscreen/external/macos_input_sim wait 1000 key w down wait 250 key w u
 This uses Quartz/CGEvent and requires macOS Accessibility permission for the
 terminal or parent process launching the simulator.
 
-Controller simulation is different on macOS. There is no XInput API, and SDL
-virtual joysticks are process-local. The external simulator includes a
-`gamepad-demo <ms>` backend that attempts to create a real virtual HID gamepad
-through `IOHIDUserDevice`, which is the correct macOS equivalent of an
-outside-the-game controller. Apple requires the
-`com.apple.developer.hid.virtual.device` entitlement for that backend; without
-it, the tool fails explicitly instead of giving a false positive.
+Controller simulation uses an external-process SDL bridge. OpenJK creates up to
+four ordinary SDL virtual joysticks and listens only on localhost; the simulator
+drives those devices from a separate process. Input then travels through the
+same SDL polling, joystick-slot assignment, menu routing, bindings, and usercmd
+generation as a physical controller. This avoids Apple's restricted virtual-HID
+entitlement while still testing the actual controller path inside the engine.
 
-Build, sign, and probe the external gamepad backend:
+Launch OpenJK with the bridge enabled, then build and drive it:
 
 ```sh
+OPENJK_VIRTUAL_GAMEPADS=3 OPENJK_VIRTUAL_GAMEPAD_PORT=29180 openjk.arm64 ...
 tests/splitscreen/build_external_input_sim.sh
-tests/splitscreen/sign_external_input_sim.sh
 tests/splitscreen/probe_external_gamepad_sim.sh
+tests/splitscreen/external/macos_input_sim gamepad 1 axis 1 24000 wait 250 gamepad 1 axis 1 0
+tests/splitscreen/external/macos_input_sim gamepad 2 button 0 tap
 ```
 
-`OPENJK_INPUT_SIM_SIGN_IDENTITY` can be set to a Developer ID or Apple
-Development signing identity. The default is ad-hoc signing (`-`), which is
-enough to embed the entitlement plist but may still be rejected by macOS because
-the virtual HID entitlement is restricted.
+The older `hid-gamepad-demo` command remains available for machines with an
+Apple-authorized `com.apple.developer.hid.virtual.device` signing identity, but
+it is not required for automated QA.
 
-If the probe exits `137` / `Killed: 9`, macOS killed the tool because the
-restricted entitlement is present but not authorized by the signing identity.
-Check available identities with:
+The external menu run drives the stock player, saber, Force, top-menu, Controls,
+join/spectate, virtual-keyboard, CVAR, cheat, and per-player console flows. The
+controller shortcuts used by split-screen players are:
 
-```sh
-security find-identity -v -p codesigning
-```
+- Start: open that player's stock in-game top menu.
+- Back + Start: toggle that player's Quake console.
+- X: open that player's virtual keyboard from player setup.
+- Left shoulder: open the stock saber setup screen.
+- Right shoulder: open the stock Force setup screen.
+- B or Back: cancel or return to the previous split-screen menu.

@@ -11655,6 +11655,7 @@ static void UI_ReturnToSplitScreenTopMenu( int player )
 	trap->Cvar_Set( "ui_splitScreenInputTarget", va( "%i", player ) );
 	trap->Cvar_Set( "ui_splitScreenConfiguring", "0" );
 	trap->Cvar_Set( "ui_splitScreenMenuMode", "top" );
+	trap->Cvar_Set( "ui_splitScreenTopReset", "1" );
 	trap->Cvar_Set( "ui_splitScreenControlsMenuReset", "0" );
 	Menus_ActivateByName( "ingame" );
 }
@@ -11882,6 +11883,28 @@ static void UI_PaintSplitScreenIngameMenus( void )
 
 	if ( !ingameMenu ) {
 		return;
+	}
+	if ( trap->Cvar_VariableValue( "ui_splitScreenTopReset" ) ) {
+		itemDef_t *firstItem;
+		int i;
+		ingameMenu->cursorItem = -1;
+		for ( i = 0; i < ingameMenu->itemCount; ++i ) {
+			if ( ingameMenu->items[i] ) {
+				ingameMenu->items[i]->window.flags &= ~WINDOW_HASFOCUS;
+			}
+		}
+		firstItem = Menu_FindItemByName( ingameMenu, "about" );
+		if ( firstItem ) {
+			for ( i = 0; i < ingameMenu->itemCount; ++i ) {
+				if ( ingameMenu->items[i] == firstItem ) {
+					ingameMenu->cursorItem = i;
+					firstItem->window.flags |= WINDOW_HASFOCUS;
+					trap->Cvar_Set( "ui_splitScreenFocusedItem", "about" );
+					break;
+				}
+			}
+		}
+		trap->Cvar_Set( "ui_splitScreenTopReset", "0" );
 	}
 
 	playerCount = UI_SplitScreenSetupPlayerCount();
@@ -12153,6 +12176,17 @@ static qboolean UI_HandleSplitScreenPlayerSetupKey( int key, qboolean down )
 	key = UI_NormalizeSplitScreenMenuKey( key );
 
 	if ( key == A_ESCAPE ) {
+		if ( UI_MenuIsVisible( "ingame_saber" ) || UI_MenuIsVisible( "ingame_playerforce" ) ) {
+			Menus_CloseByName( "ingame_saber" );
+			Menus_CloseByName( "ingame_playerforce" );
+			Menus_ActivateByName( "ingame_player" );
+			return qtrue;
+		}
+		if ( trap->Cvar_VariableValue( "ui_splitScreenSetupFromTop" ) ) {
+			trap->Cvar_Set( "ui_splitScreenSetupFromTop", "0" );
+			UI_ReturnToSplitScreenTopMenu( UI_SplitScreenInputTargetPlayer() );
+			return qtrue;
+		}
 		Menus_CloseByName( "ingame_saber" );
 		Menus_CloseByName( "splitscreen_players" );
 		Menus_ActivateByName( "splitscreen_start" );
@@ -12186,8 +12220,19 @@ static qboolean UI_HandleSplitScreenPlayerSetupKey( int key, qboolean down )
 	trap->Cvar_Set( "ui_splitScreenInputTarget", va( "%i", player ) );
 	trap->Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
 	UI_ApplySplitScreenPlayerModelSelection( menu, player );
+	if ( key == A_JOY9 ) {
+		Menus_CloseByName( "ingame_playerforce" );
+		Menus_ActivateByName( "ingame_saber" );
+		return qtrue;
+	}
+	if ( key == A_JOY10 ) {
+		Menus_CloseByName( "ingame_saber" );
+		Menus_ActivateByName( "ingame_playerforce" );
+		return qtrue;
+	}
 
-	if ( controllerNavigation && ( key == A_CURSOR_LEFT || key == A_CURSOR_RIGHT || key == A_CURSOR_UP || key == A_CURSOR_DOWN ) ) {
+	if ( controllerNavigation && menu == Menus_FindByName( "ingame_player" ) &&
+		( key == A_CURSOR_LEFT || key == A_CURSOR_RIGHT || key == A_CURSOR_UP || key == A_CURSOR_DOWN ) ) {
 		if ( UI_HandleSplitScreenCharacterGridKey( menu, key, down ) ) {
 			trap->Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
 			UI_SaveSplitScreenPlayerProfile( player );
@@ -12243,26 +12288,26 @@ static void UI_ApplySplitScreenPlayerProfile( int player )
 static void UI_SplitScreenSendPlayerCommand( int player, const char *command )
 {
 	if ( player == 1 ) {
-		trap->Cmd_ExecuteText( EXEC_APPEND, va( "cmd %s\n", command ) );
+		trap->Cmd_ExecuteText( EXEC_INSERT, va( "cmd %s\n", command ) );
 		return;
 	}
 
 	if ( UI_SplitScreenPlayerHasNetworkClient( player ) ) {
-		trap->Cmd_ExecuteText( EXEC_APPEND, va( "splitnet_cmd %i %s\n", player, command ) );
+		trap->Cmd_ExecuteText( EXEC_INSERT, va( "splitnet_cmd %i %s\n", player, command ) );
 		return;
 	}
 
 	if ( !Q_stricmpn( command, "team ", 5 ) ) {
 		const char *team = command + 5;
 		if ( !Q_stricmp( team, "s" ) || !Q_stricmp( team, "spectator" ) ) {
-			trap->Cmd_ExecuteText( EXEC_APPEND, va( "cmd splitscreen_spectate %i\n", player ) );
+			trap->Cmd_ExecuteText( EXEC_INSERT, va( "cmd splitscreen_spectate %i\n", player ) );
 		} else {
-			trap->Cmd_ExecuteText( EXEC_APPEND, va( "cmd splitscreen_join %i %s\n", player, team ) );
+			trap->Cmd_ExecuteText( EXEC_INSERT, va( "cmd splitscreen_join %i %s\n", player, team ) );
 		}
 		return;
 	}
 
-	trap->Cmd_ExecuteText( EXEC_APPEND, va( "cmd %s\n", command ) );
+	trap->Cmd_ExecuteText( EXEC_INSERT, va( "cmd %s\n", command ) );
 }
 
 static int UI_SplitScreenJoinMaxRow( void )
@@ -12469,6 +12514,8 @@ static qboolean UI_HandleSplitScreenControlsKey( int key, qboolean down )
 	int menuY;
 	int oldX;
 	int oldY;
+	qboolean controllerNavigation;
+	char inputName[32] = {0};
 
 	if ( !UI_SplitScreenModeVisible( "controls" ) ) {
 		return qfalse;
@@ -12481,6 +12528,8 @@ static qboolean UI_HandleSplitScreenControlsKey( int key, qboolean down )
 	if ( UI_CaptureSplitScreenControllerBind( player, key ) ) {
 		return qtrue;
 	}
+	trap->Cvar_VariableStringBuffer( UI_SplitScreenInputCvarName( player ), inputName, sizeof( inputName ) );
+	controllerNavigation = (qboolean)!Q_stricmpn( inputName, "controller", 10 );
 
 	key = UI_NormalizeSplitScreenMenuKey( key );
 
@@ -12494,14 +12543,20 @@ static qboolean UI_HandleSplitScreenControlsKey( int key, qboolean down )
 		return qtrue;
 	}
 
-	UI_SplitScreenSetupPointToMenu( player, uiInfo.uiDC.cursorx, uiInfo.uiDC.cursory, &menuX, &menuY );
 	oldX = uiInfo.uiDC.cursorx;
 	oldY = uiInfo.uiDC.cursory;
-	uiInfo.uiDC.cursorx = menuX;
-	uiInfo.uiDC.cursory = menuY;
 	menu->window.flags |= ( WINDOW_FORCED | WINDOW_VISIBLE );
-	Menu_HandleMouseMove( menu, menuX, menuY );
+	if ( !controllerNavigation ) {
+		UI_SplitScreenSetupPointToMenu( player, uiInfo.uiDC.cursorx, uiInfo.uiDC.cursory, &menuX, &menuY );
+		uiInfo.uiDC.cursorx = menuX;
+		uiInfo.uiDC.cursory = menuY;
+		Menu_HandleMouseMove( menu, menuX, menuY );
+	}
 	Menu_HandleKey( menu, key, down );
+	{
+		itemDef_t *focused = UI_SplitScreenFocusedItem( menu );
+		trap->Cvar_Set( "ui_splitScreenFocusedItem", focused && focused->window.name ? focused->window.name : "" );
+	}
 	trap->Cvar_Set( "ui_splitScreenControlsAwaitingGamepad", Display_KeyBindPending() ? "1" : "0" );
 	uiInfo.uiDC.cursorx = oldX;
 	uiInfo.uiDC.cursory = oldY;
@@ -12516,6 +12571,8 @@ static qboolean UI_HandleSplitScreenIngameKey( int key, qboolean down )
 	int menuY;
 	int oldX;
 	int oldY;
+	qboolean controllerNavigation;
+	char inputName[32] = {0};
 
 	if ( !UI_SplitScreenIngameVisible() ) {
 		return qfalse;
@@ -12538,7 +12595,11 @@ static qboolean UI_HandleSplitScreenIngameKey( int key, qboolean down )
 	}
 
 	player = UI_SplitScreenInputTargetPlayer();
-	UI_SplitScreenSetupPointToMenu( player, uiInfo.uiDC.cursorx, uiInfo.uiDC.cursory, &menuX, &menuY );
+	trap->Cvar_VariableStringBuffer( UI_SplitScreenInputCvarName( player ), inputName, sizeof( inputName ) );
+	controllerNavigation = (qboolean)!Q_stricmpn( inputName, "controller", 10 );
+	if ( !controllerNavigation ) {
+		UI_SplitScreenSetupPointToMenu( player, uiInfo.uiDC.cursorx, uiInfo.uiDC.cursory, &menuX, &menuY );
+	}
 	UI_LoadSplitScreenPlayerProfile( player );
 	menu = Menus_FindByName( "ingame" );
 	if ( !menu ) {
@@ -12547,11 +12608,17 @@ static qboolean UI_HandleSplitScreenIngameKey( int key, qboolean down )
 
 	oldX = uiInfo.uiDC.cursorx;
 	oldY = uiInfo.uiDC.cursory;
-	uiInfo.uiDC.cursorx = menuX;
-	uiInfo.uiDC.cursory = menuY;
 	menu->window.flags |= WINDOW_FORCED;
-	Menu_HandleMouseMove( menu, menuX, menuY );
+	if ( !controllerNavigation ) {
+		uiInfo.uiDC.cursorx = menuX;
+		uiInfo.uiDC.cursory = menuY;
+		Menu_HandleMouseMove( menu, menuX, menuY );
+	}
 	Menu_HandleKey( menu, key, down );
+	{
+		itemDef_t *focused = UI_SplitScreenFocusedItem( menu );
+		trap->Cvar_Set( "ui_splitScreenFocusedItem", focused && focused->window.name ? focused->window.name : "<none>" );
+	}
 	if ( UI_MenuIsVisible( "ingame_join" ) ) {
 		Menus_CloseByName( "ingame_join" );
 		UI_OpenSplitScreenModeForPlayer( "join", player );
@@ -12594,6 +12661,7 @@ static qboolean UI_HandleSplitScreenIngameKey( int key, qboolean down )
 		Menus_CloseByName( "splitscreen" );
 		trap->Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
 		trap->Cvar_Set( "ui_splitScreenMenuMode", "setup" );
+		trap->Cvar_Set( "ui_splitScreenSetupFromTop", "1" );
 		Menus_ActivateByName( "splitscreen_players" );
 		UI_LoadSplitScreenPlayerProfile( player );
 	}

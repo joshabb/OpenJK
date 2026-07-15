@@ -20,6 +20,12 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 */
 
 #include <SDL.h>
+#if defined(__APPLE__)
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 #include "qcommon/qcommon.h"
 #include "qcommon/q_shared.h"
 #include "client/client.h"
@@ -34,6 +40,138 @@ static SDL_Joystick *splitSticks[MAX_SPLITSCREEN_JOYSTICKS];
 #if !defined(_JK2EXE) && !defined(DEDICATED)
 static SDL_GameController *splitGamepads[MAX_SPLITSCREEN_JOYSTICKS];
 static qboolean splitMenuButtonDown[MAX_SPLITSCREEN_JOYSTICKS];
+static qboolean splitMenuOpenedByButton[MAX_SPLITSCREEN_JOYSTICKS];
+static qboolean splitConsoleChordDown[MAX_SPLITSCREEN_JOYSTICKS];
+#endif
+
+#if defined(__APPLE__) && SDL_VERSION_ATLEAST(2, 0, 14)
+#define SPLIT_VIRTUAL_GAMEPAD_MAGIC 0x4f4a4750u
+#define SPLIT_VIRTUAL_GAMEPAD_VERSION 1
+#define SPLIT_VIRTUAL_GAMEPAD_AXES 6
+#define SPLIT_VIRTUAL_GAMEPAD_BUTTONS 16
+
+typedef struct splitVirtualGamepadPacket_s
+{
+	Uint32 magic;
+	Uint8 version;
+	Uint8 controller;
+	Uint16 buttons;
+	Sint16 axes[SPLIT_VIRTUAL_GAMEPAD_AXES];
+} splitVirtualGamepadPacket_t;
+
+static int splitVirtualGamepadSocket = -1;
+static int splitVirtualGamepadCount = 0;
+static int splitVirtualGamepadDeviceIndex[MAX_SPLITSCREEN_JOYSTICKS];
+
+static void IN_ShutdownVirtualGamepads( void )
+{
+	int i;
+
+	if ( splitVirtualGamepadSocket >= 0 ) {
+		close( splitVirtualGamepadSocket );
+		splitVirtualGamepadSocket = -1;
+	}
+	for ( i = splitVirtualGamepadCount - 1; i >= 0; --i ) {
+		SDL_JoystickDetachVirtual( splitVirtualGamepadDeviceIndex[i] );
+	}
+	splitVirtualGamepadCount = 0;
+}
+
+static void IN_InitVirtualGamepads( void )
+{
+	const char *countText = getenv( "OPENJK_VIRTUAL_GAMEPADS" );
+	const char *portText = getenv( "OPENJK_VIRTUAL_GAMEPAD_PORT" );
+	struct sockaddr_in address;
+	int requested;
+	int port;
+	int flags;
+	int i;
+
+	if ( !countText || !countText[0] || splitVirtualGamepadSocket >= 0 ) {
+		return;
+	}
+	requested = atoi( countText );
+	if ( requested < 1 ) requested = 1;
+	if ( requested > MAX_SPLITSCREEN_JOYSTICKS ) requested = MAX_SPLITSCREEN_JOYSTICKS;
+	port = ( portText && portText[0] ) ? atoi( portText ) : 29180;
+	if ( port < 1024 || port > 65535 ) port = 29180;
+
+	splitVirtualGamepadSocket = socket( AF_INET, SOCK_DGRAM, 0 );
+	if ( splitVirtualGamepadSocket < 0 ) {
+		Com_Printf( "External gamepad bridge: socket creation failed\n" );
+		return;
+	}
+	flags = fcntl( splitVirtualGamepadSocket, F_GETFL, 0 );
+	fcntl( splitVirtualGamepadSocket, F_SETFL, flags | O_NONBLOCK );
+	memset( &address, 0, sizeof( address ) );
+	address.sin_family = AF_INET;
+	address.sin_addr.s_addr = htonl( INADDR_LOOPBACK );
+	address.sin_port = htons( (Uint16)port );
+	if ( bind( splitVirtualGamepadSocket, (struct sockaddr *)&address, sizeof( address ) ) != 0 ) {
+		Com_Printf( "External gamepad bridge: could not bind 127.0.0.1:%d\n", port );
+		IN_ShutdownVirtualGamepads();
+		return;
+	}
+
+	for ( i = 0; i < requested; ++i ) {
+		int deviceIndex = SDL_JoystickAttachVirtual( SDL_JOYSTICK_TYPE_GAMECONTROLLER,
+			SPLIT_VIRTUAL_GAMEPAD_AXES, SPLIT_VIRTUAL_GAMEPAD_BUTTONS, 1 );
+		if ( deviceIndex < 0 ) {
+			Com_Printf( "External gamepad bridge: SDL virtual joystick %d failed: %s\n", i + 1, SDL_GetError() );
+			break;
+		}
+		splitVirtualGamepadDeviceIndex[splitVirtualGamepadCount++] = deviceIndex;
+	}
+	Com_Printf( "External gamepad bridge: %d SDL gamepads listening on 127.0.0.1:%d\n",
+		splitVirtualGamepadCount, port );
+}
+
+static void IN_PollVirtualGamepads( void )
+{
+	splitVirtualGamepadPacket_t packet;
+	ssize_t received;
+
+	if ( splitVirtualGamepadSocket < 0 ) {
+		return;
+	}
+	while ( ( received = recv( splitVirtualGamepadSocket, &packet, sizeof( packet ), 0 ) ) >= 0 ) {
+		SDL_Joystick *joystick;
+		Uint16 buttons;
+		int i;
+		if ( received != sizeof( packet ) || ntohl( packet.magic ) != SPLIT_VIRTUAL_GAMEPAD_MAGIC ||
+			packet.version != SPLIT_VIRTUAL_GAMEPAD_VERSION || packet.controller >= splitVirtualGamepadCount ) {
+			continue;
+		}
+		joystick = SDL_JoystickOpen( splitVirtualGamepadDeviceIndex[packet.controller] );
+		if ( !joystick ) {
+			continue;
+		}
+		buttons = ntohs( packet.buttons );
+		Com_DPrintf( "External gamepad bridge: controller=%d buttons=0x%04x axis0=%d axis1=%d\n",
+			packet.controller + 1, buttons, (Sint16)ntohs( (Uint16)packet.axes[0] ),
+			(Sint16)ntohs( (Uint16)packet.axes[1] ) );
+		for ( i = 0; i < SPLIT_VIRTUAL_GAMEPAD_AXES; ++i ) {
+			SDL_JoystickSetVirtualAxis( joystick, i, (Sint16)ntohs( (Uint16)packet.axes[i] ) );
+		}
+		for ( i = 0; i < SPLIT_VIRTUAL_GAMEPAD_BUTTONS; ++i ) {
+			SDL_JoystickSetVirtualButton( joystick, i, (buttons & ( 1u << i )) ? 1 : 0 );
+		}
+		SDL_JoystickClose( joystick );
+	}
+}
+
+static int IN_JoystickDeviceIndexForSlot( int slot )
+{
+	if ( slot >= 0 && slot < splitVirtualGamepadCount ) {
+		return splitVirtualGamepadDeviceIndex[slot];
+	}
+	return slot;
+}
+#else
+static void IN_InitVirtualGamepads( void ) {}
+static void IN_PollVirtualGamepads( void ) {}
+static void IN_ShutdownVirtualGamepads( void ) {}
+static int IN_JoystickDeviceIndexForSlot( int slot ) { return slot; }
 #endif
 
 static qboolean mouseAvailable = qfalse;
@@ -629,15 +767,13 @@ static qboolean IN_SplitScreenControlsAwaitingGamepadBind( void )
 
 static void IN_UpdateSplitScreenControllerUIEvents( int player, int slot, SDL_Joystick *controller )
 {
+	qboolean uiActive = (qboolean)( Key_GetCatcher() & KEYCATCH_UI );
 	int i;
 	int total;
 	int axes = 0;
 	unsigned int hats = 0;
 	stick_state_s *state;
 
-	if ( !( Key_GetCatcher() & KEYCATCH_UI ) ) {
-		return;
-	}
 	if ( slot + 1 >= MAX_SPLITSCREEN_JOYSTICKS ) {
 		return;
 	}
@@ -652,6 +788,17 @@ static void IN_UpdateSplitScreenControllerUIEvents( int player, int slot, SDL_Jo
 	for ( i = 0; i < total; i++ ) {
 		qboolean pressed = (qboolean)( SDL_JoystickGetButton( controller, i ) != 0 );
 		if ( pressed == state->buttons[i] ) {
+			continue;
+		}
+		if ( !uiActive ) {
+			state->buttons[i] = pressed;
+			continue;
+		}
+		if ( i == 7 && splitMenuOpenedByButton[slot] ) {
+			if ( !pressed ) {
+				splitMenuOpenedByButton[slot] = qfalse;
+			}
+			state->buttons[i] = pressed;
 			continue;
 		}
 
@@ -696,6 +843,9 @@ static void IN_UpdateSplitScreenControllerUIEvents( int player, int slot, SDL_Jo
 		}
 
 		state->buttons[i] = pressed;
+	}
+	if ( !uiActive ) {
+		return;
 	}
 
 	total = SDL_JoystickNumHats( controller );
@@ -755,6 +905,7 @@ static void IN_UpdateSplitScreenControllerUIEvents( int player, int slot, SDL_Jo
 
 static void IN_UpdateSplitScreenGamepadUIEvents( int player, int slot, SDL_GameController *gamepad )
 {
+	qboolean uiActive = (qboolean)( Key_GetCatcher() & KEYCATCH_UI );
 	static const SDL_GameControllerButton buttonMap[] = {
 		SDL_CONTROLLER_BUTTON_A,
 		SDL_CONTROLLER_BUTTON_B,
@@ -764,7 +915,9 @@ static void IN_UpdateSplitScreenGamepadUIEvents( int player, int slot, SDL_GameC
 		SDL_CONTROLLER_BUTTON_DPAD_UP,
 		SDL_CONTROLLER_BUTTON_DPAD_DOWN,
 		SDL_CONTROLLER_BUTTON_DPAD_LEFT,
-		SDL_CONTROLLER_BUTTON_DPAD_RIGHT
+		SDL_CONTROLLER_BUTTON_DPAD_RIGHT,
+		SDL_CONTROLLER_BUTTON_LEFTSHOULDER,
+		SDL_CONTROLLER_BUTTON_RIGHTSHOULDER
 	};
 	static const int keyMap[] = {
 		A_ENTER,
@@ -775,15 +928,14 @@ static void IN_UpdateSplitScreenGamepadUIEvents( int player, int slot, SDL_GameC
 		A_CURSOR_UP,
 		A_CURSOR_DOWN,
 		A_CURSOR_LEFT,
-		A_CURSOR_RIGHT
+		A_CURSOR_RIGHT,
+		A_JOY9,
+		A_JOY10
 	};
 	int i;
 	int axes = 0;
 	stick_state_s *state;
 
-	if ( !( Key_GetCatcher() & KEYCATCH_UI ) ) {
-		return;
-	}
 	if ( slot + 1 >= MAX_SPLITSCREEN_JOYSTICKS ) {
 		return;
 	}
@@ -793,6 +945,17 @@ static void IN_UpdateSplitScreenGamepadUIEvents( int player, int slot, SDL_GameC
 		qboolean pressed = (qboolean)( SDL_GameControllerGetButton( gamepad, buttonMap[i] ) != 0 );
 
 		if ( pressed == state->buttons[i] ) {
+			continue;
+		}
+		if ( !uiActive ) {
+			state->buttons[i] = pressed;
+			continue;
+		}
+		if ( buttonMap[i] == SDL_CONTROLLER_BUTTON_START && splitMenuOpenedByButton[slot] ) {
+			if ( !pressed ) {
+				splitMenuOpenedByButton[slot] = qfalse;
+			}
+			state->buttons[i] = pressed;
 			continue;
 		}
 
@@ -809,6 +972,9 @@ static void IN_UpdateSplitScreenGamepadUIEvents( int player, int slot, SDL_GameC
 		}
 
 		state->buttons[i] = pressed;
+	}
+	if ( !uiActive ) {
+		return;
 	}
 
 	if ( SDL_GameControllerGetAxis( gamepad, SDL_CONTROLLER_AXIS_LEFTX ) < -in_joystickThreshold->value * 32767.0f ) {
@@ -892,13 +1058,32 @@ static void IN_UpdateSplitScreenControllerState( void )
 		for ( i = 0; i < total; i++ )
 		{
 			qboolean pressed = (qboolean)( SDL_JoystickGetButton( controller, i ) != 0 );
-			if ( i == 7 ) {
-				if ( pressed && !splitMenuButtonDown[slot] && !( Key_GetCatcher() & KEYCATCH_UI ) ) {
-					Cbuf_ExecuteText( EXEC_APPEND, va( "splitscreen_topmenu %i\n", player ) );
-				}
-				splitMenuButtonDown[slot] = pressed;
-			}
 			CL_SplitScreenSetControllerButton( player, i, pressed );
+		}
+
+		{
+			qboolean backPressed = splitGamepads[slot]
+				? (qboolean)( SDL_GameControllerGetButton( splitGamepads[slot], SDL_CONTROLLER_BUTTON_BACK ) != 0 )
+				: qfalse;
+			qboolean menuPressed = splitGamepads[slot]
+				? (qboolean)( SDL_GameControllerGetButton( splitGamepads[slot], SDL_CONTROLLER_BUTTON_START ) != 0 )
+				: (qboolean)( SDL_JoystickNumButtons( controller ) > 7 && SDL_JoystickGetButton( controller, 7 ) != 0 );
+			if ( menuPressed && !backPressed && !splitMenuButtonDown[slot] && !( Key_GetCatcher() & KEYCATCH_UI ) ) {
+				Com_DPrintf( "Split-screen controller slot %d opening top menu for player %d\n", slot + 1, player );
+				memset( stick_state[slot + 1].buttons, 0, sizeof( stick_state[slot + 1].buttons ) );
+				splitMenuOpenedByButton[slot] = qtrue;
+				Cbuf_ExecuteText( EXEC_INSERT, va( "splitscreen_topmenu %i\n", player ) );
+			}
+			splitMenuButtonDown[slot] = menuPressed;
+		}
+		if ( splitGamepads[slot] ) {
+			qboolean consoleChord = (qboolean)(
+				SDL_GameControllerGetButton( splitGamepads[slot], SDL_CONTROLLER_BUTTON_BACK ) &&
+				SDL_GameControllerGetButton( splitGamepads[slot], SDL_CONTROLLER_BUTTON_START ) );
+			if ( consoleChord && !splitConsoleChordDown[slot] ) {
+				Con_ToggleConsoleForPlayer( player );
+			}
+			splitConsoleChordDown[slot] = consoleChord;
 		}
 
 		if ( splitGamepads[slot] ) {
@@ -968,6 +1153,9 @@ static void IN_InitJoystick( void )
 		}
 		Com_DPrintf("SDL_Init(SDL_INIT_JOYSTICK) passed.\n");
 	}
+	if ( in_joystick->integer ) {
+		IN_InitVirtualGamepads();
+	}
 #if !defined(_JK2EXE) && !defined(DEDICATED)
 	if (!SDL_WasInit(SDL_INIT_GAMECONTROLLER))
 	{
@@ -1009,17 +1197,17 @@ static void IN_InitJoystick( void )
 
 	in_joystickThreshold = Cvar_Get( "joy_threshold", "0.15", CVAR_ARCHIVE_ND );
 
-	stick = SDL_JoystickOpen( in_joystickNo->integer );
+	stick = SDL_JoystickOpen( IN_JoystickDeviceIndexForSlot( in_joystickNo->integer ) );
 	for (i = 0; i < MAX_SPLITSCREEN_JOYSTICKS && i < total; i++)
 	{
 		if ( i == in_joystickNo->integer ) {
 			splitSticks[i] = stick;
 		} else {
-			splitSticks[i] = SDL_JoystickOpen( i );
+			splitSticks[i] = SDL_JoystickOpen( IN_JoystickDeviceIndexForSlot( i ) );
 		}
 #if !defined(_JK2EXE) && !defined(DEDICATED)
-		if ( SDL_IsGameController( i ) ) {
-			splitGamepads[i] = SDL_GameControllerOpen( i );
+		if ( SDL_IsGameController( IN_JoystickDeviceIndexForSlot( i ) ) ) {
+			splitGamepads[i] = SDL_GameControllerOpen( IN_JoystickDeviceIndexForSlot( i ) );
 		}
 #endif
 	}
@@ -1030,7 +1218,7 @@ static void IN_InitJoystick( void )
 	}
 
 	Com_DPrintf( "Joystick %d opened\n", in_joystickNo->integer );
-	Com_DPrintf( "Name:       %s\n", SDL_JoystickNameForIndex(in_joystickNo->integer) );
+	Com_DPrintf( "Name:       %s\n", SDL_JoystickNameForIndex(IN_JoystickDeviceIndexForSlot(in_joystickNo->integer)) );
 	Com_DPrintf( "Axes:       %d\n", SDL_JoystickNumAxes(stick) );
 	Com_DPrintf( "Hats:       %d\n", SDL_JoystickNumHats(stick) );
 	Com_DPrintf( "Buttons:    %d\n", SDL_JoystickNumButtons(stick) );
@@ -1039,7 +1227,7 @@ static void IN_InitJoystick( void )
 	{
 		if (splitSticks[i])
 		{
-			Com_DPrintf( "Split-screen joystick slot %d opened: %s\n", i + 1, SDL_JoystickNameForIndex(i) );
+			Com_DPrintf( "Split-screen joystick slot %d opened: %s\n", i + 1, SDL_JoystickNameForIndex(IN_JoystickDeviceIndexForSlot(i)) );
 		}
 	}
 #if !defined(_JK2EXE) && !defined(DEDICATED)
@@ -1412,7 +1600,9 @@ static void IN_JoyMove( void )
 	if (!stick)
 		return;
 
+	IN_PollVirtualGamepads();
 	SDL_JoystickUpdate();
+	SDL_GameControllerUpdate();
 	IN_UpdateSplitScreenControllerState();
 	if ( !legacyJoystickFeedsPlayerOne ) {
 		return;
@@ -1675,6 +1865,7 @@ static void IN_ShutdownJoystick( void )
 			splitSticks[i] = NULL;
 		}
 	}
+	IN_ShutdownVirtualGamepads();
 
 #if !defined(_JK2EXE) && !defined(DEDICATED)
 	if ( SDL_WasInit( SDL_INIT_GAMECONTROLLER ) ) {

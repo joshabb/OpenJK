@@ -1591,6 +1591,7 @@ void CL_InitKeyCommands( void ) {
 		Cvar_Set( "ui_splitScreenInputTarget", va( "%i", player ) );
 		Cvar_Set( "ui_splitScreenMenuMode", "top" );
 		Cvar_Set( "ui_splitScreenConfiguring", "0" );
+		Cvar_Set( "ui_splitScreenTopReset", "1" );
 		UIVM_SetActiveMenu( UIMENU_INGAME );
 		Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
 		Cvar_Set( "ui_splitScreenInputTarget", va( "%i", player ) );
@@ -1636,6 +1637,47 @@ void CL_InitKeyCommands( void ) {
 		Cvar_Set( "ui_splitScreenInputTarget", va( "%i", player ) );
 		Cvar_Set( "ui_splitScreenMenuMode", "setup" );
 	}, "Open a split-screen player's stock setup/profile menu" );
+	Cmd_AddCommand( "splitui_assert", [](){
+		char actual[MAX_CVAR_VALUE_STRING];
+		const char *name;
+		const char *expected;
+
+		if ( Cmd_Argc() != 3 ) {
+			Com_Printf( "usage: splitui_assert <cvar> <expected>\n" );
+			return;
+		}
+		name = Cmd_Argv( 1 );
+		expected = Cmd_Argv( 2 );
+		Cvar_VariableStringBuffer( name, actual, sizeof( actual ) );
+		Com_Printf( "SplitUIAssert: %s cvar=%s expected=%s actual=%s\n",
+			!Q_stricmp( actual, expected ) ? "PASS" : "FAIL", name, expected, actual );
+	}, "Assert a split-screen UI cvar for QA" );
+	Cmd_AddCommand( "splitui_status", [](){
+		char mode[32];
+		char device[32];
+		int player;
+
+		Cvar_VariableStringBuffer( "ui_splitScreenMenuMode", mode, sizeof( mode ) );
+		Cvar_VariableStringBuffer( "ui_splitScreenLastInputDevice", device, sizeof( device ) );
+		Com_Printf( "SplitUIStatus: mode=%s target=%i profile=%i keyboard=%i lastDevice=%s catcher=%i\n",
+			mode[0] ? mode : "<none>", Cvar_VariableIntegerValue( "ui_splitScreenInputTarget" ),
+			Cvar_VariableIntegerValue( "ui_splitScreenProfileTarget" ),
+			Cvar_VariableIntegerValue( "ui_splitScreenKeyboardOpen" ),
+			device[0] ? device : "<none>", Key_GetCatcher() );
+		{
+			char focused[64];
+			Cvar_VariableStringBuffer( "ui_splitScreenFocusedItem", focused, sizeof( focused ) );
+			Com_Printf( "SplitUIStatus: focused=%s actionRow=%i configuring=%i\n", focused[0] ? focused : "<none>",
+				Cvar_VariableIntegerValue( "ui_splitScreenActionRow" ), Cvar_VariableIntegerValue( "ui_splitScreenConfiguring" ) );
+		}
+		for ( player = 1; player <= 4; ++player ) {
+			char inputName[32];
+			char playerName[MAX_CVAR_VALUE_STRING];
+			Cvar_VariableStringBuffer( va( "ui_splitScreenP%iInput", player ), inputName, sizeof( inputName ) );
+			Cvar_VariableStringBuffer( player == 1 ? "name" : va( "ui_splitScreenP%iName", player ), playerName, sizeof( playerName ) );
+			Com_Printf( "SplitUIStatus: player=%i input=%s name=%s\n", player, inputName, playerName );
+		}
+	}, "Print split-screen UI ownership state for QA" );
 	Cmd_AddCommand( "splitinput_key", [](){
 		int key;
 		qboolean down = qtrue;
