@@ -26,6 +26,8 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 #include "cl_cgameapi.h"
 #include "cl_uiapi.h"
 #include "qcommon/stringed_ingame.h"
+
+void Sys_QueEvent( int evTime, sysEventType_t evType, int value, int value2, int ptrLength, void *ptr );
 /*
 
 key up events are sent even if in console mode
@@ -308,6 +310,18 @@ static int Key_TranslateSplitScreenMenuKey( int key )
 	default:
 		return key;
 	}
+}
+
+static qboolean Key_SplitScreenControlsAwaitingGamepadBind( void )
+{
+	char mode[16];
+
+	if ( !Cvar_VariableIntegerValue( "cl_splitScreen" ) || !Cvar_VariableIntegerValue( "ui_splitScreenControlsAwaitingGamepad" ) ) {
+		return qfalse;
+	}
+
+	Cvar_VariableStringBuffer( "ui_splitScreenMenuMode", mode, sizeof( mode ) );
+	return (qboolean)!Q_stricmp( mode, "controls" );
 }
 
 static int Key_SplitScreenPrimaryControllerPlayer( void )
@@ -1565,11 +1579,14 @@ void CL_InitKeyCommands( void ) {
 	Cmd_AddCommand( "splitscreen_menu", [](){ UIVM_SetActiveMenu( UIMENU_SPLITSCREEN ); }, "Open the local split-screen player setup menu" );
 	Cmd_AddCommand( "splitscreen_topmenu", [](){
 		int player = atoi( Cmd_Argv( 1 ) );
+		char playerName[MAX_CVAR_VALUE_STRING];
 		if ( player < 1 ) {
 			player = 1;
 		} else if ( player > 4 ) {
 			player = 4;
 		}
+		Cvar_VariableStringBuffer( player > 1 ? va( "ui_splitScreenP%iName", player ) : "name", playerName, sizeof( playerName ) );
+		Cvar_Set( "ui_Name", playerName );
 		Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
 		Cvar_Set( "ui_splitScreenInputTarget", va( "%i", player ) );
 		Cvar_Set( "ui_splitScreenMenuMode", "top" );
@@ -1579,6 +1596,139 @@ void CL_InitKeyCommands( void ) {
 		Cvar_Set( "ui_splitScreenInputTarget", va( "%i", player ) );
 		Cvar_Set( "ui_splitScreenMenuMode", "top" );
 	}, "Open a split-screen player's in-game top menu" );
+	Cmd_AddCommand( "splitscreen_keyboard", [](){
+		int player = atoi( Cmd_Argv( 1 ) );
+		char playerName[MAX_CVAR_VALUE_STRING];
+		if ( player < 1 ) {
+			player = 1;
+		} else if ( player > 4 ) {
+			player = 4;
+		}
+		Cvar_VariableStringBuffer( player > 1 ? va( "ui_splitScreenP%iName", player ) : "name", playerName, sizeof( playerName ) );
+		Cvar_Set( "ui_Name", playerName );
+		Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
+		Cvar_Set( "ui_splitScreenInputTarget", va( "%i", player ) );
+		Cvar_Set( "ui_splitScreenMenuMode", "setup" );
+		Cvar_Set( "ui_splitScreenConfiguring", "1" );
+		UIVM_SetActiveMenu( UIMENU_INGAME );
+		Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
+		Cvar_Set( "ui_splitScreenInputTarget", va( "%i", player ) );
+		Cvar_Set( "ui_splitScreenMenuMode", "setup" );
+		Cvar_Set( "ui_splitScreenKeyboardOpen", va( "%i", player ) );
+	}, "Open a split-screen player's virtual keyboard" );
+	Cmd_AddCommand( "splitscreen_setup", [](){
+		int player = atoi( Cmd_Argv( 1 ) );
+		char playerName[MAX_CVAR_VALUE_STRING];
+		if ( player < 1 ) {
+			player = 1;
+		} else if ( player > 4 ) {
+			player = 4;
+		}
+		Cvar_VariableStringBuffer( player > 1 ? va( "ui_splitScreenP%iName", player ) : "name", playerName, sizeof( playerName ) );
+		Cvar_Set( "ui_Name", playerName );
+		Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
+		Cvar_Set( "ui_splitScreenInputTarget", va( "%i", player ) );
+		Cvar_Set( "ui_splitScreenLastInputDevice", player == 1 ? "keyboard" : va( "controller%i", player - 1 ) );
+		Cvar_Set( "ui_splitScreenMenuMode", "setup" );
+		Cvar_Set( "ui_splitScreenConfiguring", "1" );
+		UIVM_SetActiveMenu( UIMENU_INGAME );
+		Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
+		Cvar_Set( "ui_splitScreenInputTarget", va( "%i", player ) );
+		Cvar_Set( "ui_splitScreenMenuMode", "setup" );
+	}, "Open a split-screen player's stock setup/profile menu" );
+	Cmd_AddCommand( "splitinput_key", [](){
+		int key;
+		qboolean down = qtrue;
+
+		if ( Cmd_Argc() < 2 ) {
+			Com_Printf( "usage: splitinput_key <key> [0|1]\n" );
+			return;
+		}
+
+		key = Key_StringToKeynum( Cmd_Argv( 1 ) );
+		if ( key < 0 ) {
+			Com_Printf( "splitinput_key: unknown key %s\n", Cmd_Argv( 1 ) );
+			return;
+		}
+
+		if ( Cmd_Argc() >= 3 ) {
+			down = atoi( Cmd_Argv( 2 ) ) ? qtrue : qfalse;
+		}
+
+		Sys_QueEvent( 0, SE_KEY, key, down, 0, NULL );
+	}, "Inject a key event for split-screen UI/input QA" );
+	Cmd_AddCommand( "splitinput_device_key", [](){
+		int key;
+		qboolean down = qtrue;
+		const char *device;
+		int player = 1;
+
+		if ( Cmd_Argc() < 3 ) {
+			Com_Printf( "usage: splitinput_device_key <keyboard|controller1|controller2|controller3> <key> [0|1]\n" );
+			return;
+		}
+
+		device = Cmd_Argv( 1 );
+		key = Key_StringToKeynum( Cmd_Argv( 2 ) );
+		if ( key < 0 ) {
+			Com_Printf( "splitinput_device_key: unknown key %s\n", Cmd_Argv( 2 ) );
+			return;
+		}
+
+		if ( Cmd_Argc() >= 4 ) {
+			down = atoi( Cmd_Argv( 3 ) ) ? qtrue : qfalse;
+		}
+
+		if ( !Q_stricmp( device, "controller1" ) ) {
+			player = 2;
+		} else if ( !Q_stricmp( device, "controller2" ) ) {
+			player = 3;
+		} else if ( !Q_stricmp( device, "controller3" ) ) {
+			player = 4;
+		}
+
+		if ( !Q_stricmpn( device, "controller", 10 ) ) {
+			Cvar_Set( "ui_splitScreenInputTarget", va( "%i", player ) );
+			Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
+			Cvar_Set( "ui_splitScreenLastInputDevice", device );
+			Cvar_Set( "ui_splitScreenDeviceEventPending", "1" );
+		} else {
+			Cvar_Set( "ui_splitScreenLastInputDevice", "keyboard" );
+			Cvar_Set( "ui_splitScreenInputTarget", "0" );
+		}
+
+		Com_Printf( "SplitInputSim: key device=%s player=%i key=%i down=%i\n", device, player, key, down ? 1 : 0 );
+		Sys_QueEvent( 0, SE_KEY, key, down, 0, NULL );
+	}, "Inject a device-scoped key event for split-screen UI/input QA" );
+	Cmd_AddCommand( "splitinput_mouse", [](){
+		int dx;
+		int dy;
+
+		if ( Cmd_Argc() < 3 ) {
+			Com_Printf( "usage: splitinput_mouse <dx> <dy>\n" );
+			return;
+		}
+
+		dx = atoi( Cmd_Argv( 1 ) );
+		dy = atoi( Cmd_Argv( 2 ) );
+		Sys_QueEvent( 0, SE_MOUSE, dx, dy, 0, NULL );
+	}, "Inject a mouse delta for split-screen UI/input QA" );
+	Cmd_AddCommand( "splitinput_device_mouse", [](){
+		int dx;
+		int dy;
+
+		if ( Cmd_Argc() < 3 ) {
+			Com_Printf( "usage: splitinput_device_mouse <dx> <dy>\n" );
+			return;
+		}
+
+		dx = atoi( Cmd_Argv( 1 ) );
+		dy = atoi( Cmd_Argv( 2 ) );
+		Cvar_Set( "ui_splitScreenLastInputDevice", "mouse" );
+		Cvar_Set( "ui_splitScreenInputTarget", "0" );
+		Com_Printf( "SplitInputSim: mouse device=mouse dx=%i dy=%i\n", dx, dy );
+		Sys_QueEvent( 0, SE_MOUSE, dx, dy, 0, NULL );
+	}, "Inject a device-scoped mouse delta for split-screen UI/input QA" );
 }
 
 /*
@@ -1687,6 +1837,15 @@ Called by CL_KeyEvent to handle a keypress
 */
 void CL_KeyDownEvent( int key, unsigned time )
 {
+	if ( Cvar_VariableIntegerValue( "cl_splitScreen" ) && ( Key_GetCatcher() & KEYCATCH_UI ) ) {
+		if ( Cvar_VariableIntegerValue( "ui_splitScreenDeviceEventPending" ) ) {
+			Cvar_Set( "ui_splitScreenDeviceEventPending", "0" );
+		} else {
+			Cvar_Set( "ui_splitScreenLastInputDevice", "keyboard" );
+			Cvar_Set( "ui_splitScreenInputTarget", "0" );
+		}
+	}
+
 	kg.keys[keynames[key].upper].down = qtrue;
 	kg.keys[keynames[key].upper].repeats++;
 	if( kg.keys[keynames[key].upper].repeats == 1 ) {
@@ -1759,7 +1918,9 @@ void CL_KeyDownEvent( int key, unsigned time )
 		if ( !( Key_GetCatcher() & ( KEYCATCH_CONSOLE | KEYCATCH_UI | KEYCATCH_CGAME ) ) ) {
 			return;
 		}
-		key = Key_TranslateSplitScreenMenuKey( key );
+		if ( !Key_SplitScreenControlsAwaitingGamepadBind() ) {
+			key = Key_TranslateSplitScreenMenuKey( key );
+		}
 	}
 
 	// send the bound action
@@ -1799,6 +1960,15 @@ Called by CL_KeyEvent to handle a keyrelease
 */
 void CL_KeyUpEvent( int key, unsigned time )
 {
+	if ( Cvar_VariableIntegerValue( "cl_splitScreen" ) && ( Key_GetCatcher() & KEYCATCH_UI ) ) {
+		if ( Cvar_VariableIntegerValue( "ui_splitScreenDeviceEventPending" ) ) {
+			Cvar_Set( "ui_splitScreenDeviceEventPending", "0" );
+		} else {
+			Cvar_Set( "ui_splitScreenLastInputDevice", "keyboard" );
+			Cvar_Set( "ui_splitScreenInputTarget", "0" );
+		}
+	}
+
 	kg.keys[keynames[key].upper].repeats = 0;
 	kg.keys[keynames[key].upper].down = qfalse;
 	kg.keyDownCount--;
@@ -1818,6 +1988,9 @@ void CL_KeyUpEvent( int key, unsigned time )
 
 	if ( Cvar_VariableIntegerValue( "cl_splitScreen" ) && key >= A_JOY0 && key <= A_JOY31 ) {
 		if ( !( Key_GetCatcher() & ( KEYCATCH_CONSOLE | KEYCATCH_UI | KEYCATCH_CGAME ) ) ) {
+			return;
+		}
+		if ( Key_SplitScreenControlsAwaitingGamepadBind() ) {
 			return;
 		}
 		key = Key_TranslateSplitScreenMenuKey( key );

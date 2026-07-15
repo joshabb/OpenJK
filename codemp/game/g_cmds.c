@@ -3698,6 +3698,83 @@ static void Cmd_SplitScreenStatus_f( gentity_t *ent ) {
 	}
 }
 
+static void Cmd_SplitScreenAssertUserinfo_f( gentity_t *ent ) {
+	int player;
+	int clientNum;
+	char key[MAX_TOKEN_CHARS] = {0};
+	char expected[MAX_TOKEN_CHARS] = {0};
+	char userinfo[MAX_INFO_STRING] = {0};
+	const char *actual;
+	const char *result;
+
+	if ( !ent || !ent->client || !ent->client->pers.localClient ) {
+		return;
+	}
+	if ( trap->Argc() < 4 ) {
+		trap->SendServerCommand( ent->s.number, "print \"SplitProfileAssert: FAIL usage splitscreen_assert_userinfo <player> <key> <expected>\n\"" );
+		G_LogPrintf( "SplitProfileAssert: FAIL usage splitscreen_assert_userinfo <player> <key> <expected>\n" );
+		return;
+	}
+
+	player = G_SplitScreenPlayerArg( 1, 2 );
+	clientNum = G_FindSplitScreenClient( player );
+	trap->Argv( 2, key, sizeof( key ) );
+	trap->Argv( 3, expected, sizeof( expected ) );
+
+	if ( clientNum < 0 ) {
+		trap->SendServerCommand( ent->s.number, va( "print \"SplitProfileAssert: FAIL player=%i key=%s expected=%s actual=<not-connected>\n\"", player, key, expected ) );
+		G_LogPrintf( "SplitProfileAssert: FAIL player=%i key=%s expected=%s actual=<not-connected>\n", player, key, expected );
+		return;
+	}
+
+	trap->GetUserinfo( clientNum, userinfo, sizeof( userinfo ) );
+	actual = Info_ValueForKey( userinfo, key );
+	result = !Q_stricmp( actual, expected ) ? "PASS" : "FAIL";
+	trap->SendServerCommand( ent->s.number, va( "print \"SplitProfileAssert: %s player=%i key=%s expected=%s actual=%s\n\"", result, player, key, expected, actual ) );
+	G_LogPrintf( "SplitProfileAssert: %s player=%i key=%s expected=%s actual=%s\n", result, player, key, expected, actual );
+}
+
+static void Cmd_SplitScreenAssertState_f( gentity_t *ent ) {
+	int player;
+	int clientNum;
+	char expectedTeam[MAX_TOKEN_CHARS] = {0};
+	char expectedSpectator[MAX_TOKEN_CHARS] = {0};
+	gentity_t *split;
+	const char *actualTeam;
+	const char *result = "PASS";
+	int spectator;
+
+	if ( !ent || !ent->client || !ent->client->pers.localClient ) {
+		return;
+	}
+	if ( trap->Argc() < 4 ) {
+		trap->SendServerCommand( ent->s.number, "print \"SplitStateAssert: FAIL usage splitscreen_assert_state <player> <team> <spectatorState>\n\"" );
+		G_LogPrintf( "SplitStateAssert: FAIL usage splitscreen_assert_state <player> <team> <spectatorState>\n" );
+		return;
+	}
+
+	player = G_SplitScreenPlayerArg( 1, 2 );
+	clientNum = G_FindSplitScreenClient( player );
+	trap->Argv( 2, expectedTeam, sizeof( expectedTeam ) );
+	trap->Argv( 3, expectedSpectator, sizeof( expectedSpectator ) );
+
+	if ( clientNum < 0 ) {
+		trap->SendServerCommand( ent->s.number, va( "print \"SplitStateAssert: FAIL player=%i expectedTeam=%s expectedSpectator=%s actualTeam=<not-connected> actualSpectator=-1\n\"", player, expectedTeam, expectedSpectator ) );
+		G_LogPrintf( "SplitStateAssert: FAIL player=%i expectedTeam=%s expectedSpectator=%s actualTeam=<not-connected> actualSpectator=-1\n", player, expectedTeam, expectedSpectator );
+		return;
+	}
+
+	split = &g_entities[clientNum];
+	actualTeam = TeamName( split->client->sess.sessionTeam );
+	spectator = split->client->sess.spectatorState;
+	if ( Q_stricmp( actualTeam, expectedTeam ) || spectator != atoi( expectedSpectator ) ) {
+		result = "FAIL";
+	}
+
+	trap->SendServerCommand( ent->s.number, va( "print \"SplitStateAssert: %s player=%i expectedTeam=%s actualTeam=%s expectedSpectator=%s actualSpectator=%i\n\"", result, player, expectedTeam, actualTeam, expectedSpectator, spectator ) );
+	G_LogPrintf( "SplitStateAssert: %s player=%i expectedTeam=%s actualTeam=%s expectedSpectator=%s actualSpectator=%i\n", result, player, expectedTeam, actualTeam, expectedSpectator, spectator );
+}
+
 static void Cmd_SplitScreenPlace_f( gentity_t *ent ) {
 	int clientNum;
 	int player;
@@ -3900,6 +3977,8 @@ command_t commands[] = {
 	{ "setviewpos",			Cmd_SetViewpos_f,			CMD_CHEAT|CMD_NOINTERMISSION },
 	{ "siegeclass",			Cmd_SiegeClass_f,			CMD_NOINTERMISSION },
 	{ "splitscreen_applyprofile",	Cmd_SplitScreenApplyProfile_f,	0 },
+	{ "splitscreen_assert_state",	Cmd_SplitScreenAssertState_f,	0 },
+	{ "splitscreen_assert_userinfo",	Cmd_SplitScreenAssertUserinfo_f,	0 },
 	{ "splitscreen_cmd",	Cmd_SplitScreenCmd_f,		0 },
 	{ "splitscreen_join",	Cmd_SplitScreenJoin_f,		0 },
 	{ "splitscreen_leave",	Cmd_SplitScreenLeave_f,		0 },
