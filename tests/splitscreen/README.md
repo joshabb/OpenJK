@@ -11,6 +11,7 @@ tested.
 tests/splitscreen/run_splitscreen_qa.sh
 tests/splitscreen/run_external_gamepad_qa.sh
 tests/splitscreen/run_external_menu_qa.sh
+tests/splitscreen/run_external_character_qa.sh
 ```
 
 Useful overrides:
@@ -77,7 +78,11 @@ it is not required for automated QA.
 
 The external menu run drives the stock player, saber, Force, top-menu, Controls,
 join/spectate, virtual-keyboard, CVAR, cheat, and per-player console flows. The
-controller shortcuts used by split-screen players are:
+external character run traverses the stock portrait grid horizontally and
+vertically, verifies isolation from the other profiles, closes and reopens the
+screen by controller, and confirms the final model in gameplay.
+
+The controller shortcuts used by split-screen players are:
 
 - Start: open that player's stock in-game top menu.
 - Back + Start: toggle that player's Quake console.

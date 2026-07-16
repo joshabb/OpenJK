@@ -569,6 +569,7 @@ static void UI_BuildFindPlayerList(qboolean force);
 static int QDECL UI_ServersQsortCompare( const void *arg1, const void *arg2 );
 static int UI_MapCountByGameType(qboolean singlePlayer);
 static int UI_HeadCountByColor( void );
+static const char *UI_SelectedTeamHead(int index, int *actual);
 static void UI_ParseGameInfo(const char *teamFile);
 static const char *UI_SelectedMap(int index, int *actual);
 static int UI_GetIndexFromSelection(int actual);
@@ -5657,7 +5658,11 @@ static void UI_OpenSplitScreenPlayerProfile( int player )
 static int UI_SplitScreenPlayerModelIndex( int player )
 {
 	char cvarName[64];
+	char indexModelCvar[64];
+	char indexModel[MAX_QPATH] = {0};
 	char model[MAX_QPATH] = {0};
+	int actual;
+	int feederCount;
 	int modelIndex;
 
 	if ( player < 1 ) {
@@ -5668,8 +5673,17 @@ static int UI_SplitScreenPlayerModelIndex( int player )
 
 	Com_sprintf( cvarName, sizeof( cvarName ), "ui_splitScreenP%iModel", player );
 	Q_strncpyz( model, UI_Cvar_VariableString( cvarName ), sizeof( model ) );
-	for ( modelIndex = 0; modelIndex < uiInfo.q3HeadCount; modelIndex++ ) {
-		if ( !Q_stricmp( uiInfo.q3HeadNames[modelIndex], model ) ) {
+	Com_sprintf( cvarName, sizeof( cvarName ), "ui_splitScreenP%iModelIndex", player );
+	Com_sprintf( indexModelCvar, sizeof( indexModelCvar ), "ui_splitScreenP%iModelIndexModel", player );
+	Q_strncpyz( indexModel, UI_Cvar_VariableString( indexModelCvar ), sizeof( indexModel ) );
+	modelIndex = (int)trap->Cvar_VariableValue( cvarName );
+	feederCount = UI_HeadCountByColor();
+	if ( indexModel[0] && !Q_stricmp( indexModel, model ) && modelIndex >= 0 && modelIndex < feederCount ) {
+		return modelIndex;
+	}
+
+	for ( modelIndex = 0; modelIndex < feederCount; modelIndex++ ) {
+		if ( !Q_stricmp( UI_SelectedTeamHead( modelIndex, &actual ), model ) ) {
 			return modelIndex;
 		}
 	}
@@ -5718,7 +5732,7 @@ static void UI_ApplySplitScreenPlayerModelSelection( menuDef_t *menu, int player
 	}
 }
 
-static qboolean UI_HandleSplitScreenCharacterGridKey( menuDef_t *menu, int key, qboolean down )
+static qboolean UI_HandleSplitScreenCharacterGridKey( menuDef_t *menu, int player, int key, qboolean down )
 {
 	int i;
 
@@ -5732,7 +5746,7 @@ static qboolean UI_HandleSplitScreenCharacterGridKey( menuDef_t *menu, int key, 
 		if ( item && item->special == FEEDER_Q3HEADS && item->type == ITEM_TYPE_LISTBOX && item->typeData.listbox ) {
 			listBoxDef_t *listPtr = item->typeData.listbox;
 			int cols = listPtr->elementWidth > 0 ? (int)( item->window.rect.w / listPtr->elementWidth ) : 1;
-			int count = uiInfo.q3HeadCount;
+			int count = UI_HeadCountByColor();
 			int cursor = listPtr->cursorPos;
 			int next = cursor;
 
@@ -5765,12 +5779,17 @@ static qboolean UI_HandleSplitScreenCharacterGridKey( menuDef_t *menu, int key, 
 			}
 			item->cursorPos = next;
 			listPtr->cursorPos = next;
+			uiInfo.q3SelectedHead = next;
+			trap->Cvar_Set( "ui_selectedModelIndex", va( "%i", next ) );
 			if ( listPtr->elementStyle == LISTBOX_IMAGE ) {
 				listPtr->startPos = ( next / cols ) * cols;
 			}
 			if ( uiInfo.uiDC.feederSelection ) {
 				uiInfo.uiDC.feederSelection( item->special, item->cursorPos, item );
 			}
+			trap->Cvar_Set( va( "ui_splitScreenP%iModelIndex", player ), va( "%i", next ) );
+			trap->Cvar_Set( va( "ui_splitScreenP%iModelIndexModel", player ),
+				UI_Cvar_VariableString( va( "ui_splitScreenP%iModel", player ) ) );
 			return qtrue;
 		}
 	}
@@ -11806,11 +11825,16 @@ static void UI_HideSplitScreenIngameSubmenus( void )
 
 static void UI_SaveSplitScreenPlayerProfile( int player )
 {
+	char model[MAX_QPATH] = {0};
+
 	trap->Cvar_Set( "ui_splitScreenConfiguring", "1" );
 	trap->Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
 	trap->Cvar_Set( va( "ui_splitScreenP%iName", player ), UI_Cvar_VariableString( "ui_Name" ) );
 	trap->Cvar_Set( va( "ui_splitScreenP%iForcePowers", player ), UI_Cvar_VariableString( "forcepowers" ) );
 	UI_UpdateCharacterCvars();
+	Q_strncpyz( model, UI_Cvar_VariableString( va( "ui_splitScreenP%iModel", player ) ), sizeof( model ) );
+	trap->Cvar_Set( va( "ui_splitScreenP%iModelIndex", player ), UI_Cvar_VariableString( "ui_selectedModelIndex" ) );
+	trap->Cvar_Set( va( "ui_splitScreenP%iModelIndexModel", player ), model );
 	UI_UpdateSaberCvars();
 }
 
@@ -12233,9 +12257,8 @@ static qboolean UI_HandleSplitScreenPlayerSetupKey( int key, qboolean down )
 
 	if ( controllerNavigation && menu == Menus_FindByName( "ingame_player" ) &&
 		( key == A_CURSOR_LEFT || key == A_CURSOR_RIGHT || key == A_CURSOR_UP || key == A_CURSOR_DOWN ) ) {
-		if ( UI_HandleSplitScreenCharacterGridKey( menu, key, down ) ) {
+		if ( UI_HandleSplitScreenCharacterGridKey( menu, player, key, down ) ) {
 			trap->Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
-			UI_SaveSplitScreenPlayerProfile( player );
 		}
 		return qtrue;
 	}
