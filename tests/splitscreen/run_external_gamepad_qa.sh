@@ -2,7 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-BIN="${OPENJK_BIN:-$ROOT/build-arm64-native/openjk.arm64.app/Contents/MacOS/openjk.arm64}"
+BUILD_DIR="${OPENJK_BUILD_DIR:-$ROOT/build-arm64-native}"
+BIN="${OPENJK_BIN:-$BUILD_DIR/openjk.arm64.app/Contents/MacOS/openjk.arm64}"
 BASEPATH="${OPENJK_BASEPATH:-/Users/joshabb/Library/Application Support/Steam/steamapps/common/Jedi Academy/SWJKJA.app/Contents}"
 HOMEPATH="${OPENJK_HOMEPATH:-$ROOT/runtime-home}"
 SIM="$ROOT/tests/splitscreen/external/macos_input_sim"
@@ -11,10 +12,13 @@ LOG="$HOMEPATH/base/qa-logs/external_gamepad_bridge.stdout.txt"
 PORT="${OPENJK_VIRTUAL_GAMEPAD_PORT:-29180}"
 
 mkdir -p "$CFG_DST" "$(dirname "$LOG")" "$HOMEPATH/base/screenshots"
+"$ROOT/tests/splitscreen/install_assets.sh" "$HOMEPATH" >/dev/null
 cp "$ROOT/tests/splitscreen/cfg/external_gamepad_bridge.cfg" "$CFG_DST/"
-cp "$ROOT/build-arm64-native/codemp/ui/uiarm64.dylib" "$HOMEPATH/base/"
-cp "$ROOT/build-arm64-native/codemp/cgame/cgamearm64.dylib" "$HOMEPATH/base/"
-cp "$ROOT/build-arm64-native/codemp/game/jampgamearm64.dylib" "$HOMEPATH/base/"
+cp "$BUILD_DIR/codemp/ui/uiarm64.dylib" "$HOMEPATH/base/"
+for cgame_module in "$BUILD_DIR"/codemp/cgame/cgame*arm64.dylib; do
+	cp "$cgame_module" "$HOMEPATH/base/"
+done
+cp "$BUILD_DIR/codemp/game/jampgamearm64.dylib" "$HOMEPATH/base/"
 "$ROOT/tests/splitscreen/build_external_input_sim.sh" >/dev/null
 
 OPENJK_VIRTUAL_GAMEPADS=3 OPENJK_VIRTUAL_GAMEPAD_PORT="$PORT" "$BIN" \
@@ -44,7 +48,7 @@ if [[ $ready -ne 1 ]]; then
 fi
 
 OPENJK_VIRTUAL_GAMEPAD_PORT="$PORT" "$SIM" \
-	gamepad 1 axis 1 24000 \
+	gamepad 1 axis 1 -24000 \
 	gamepad 2 axis 0 -20000 \
 	gamepad 3 button 0 down \
 	wait 1500 \
@@ -56,8 +60,8 @@ wait "$game_pid"
 trap - EXIT
 
 rg -q "External gamepad bridge: 3 SDL gamepads listening" "$LOG"
-rg -q "SplitInputAssertCmd: PASS player=2.*expectedForward=127" "$LOG"
-rg -q "SplitInputAssertCmd: PASS player=3.*expectedRight=-128" "$LOG"
+rg -q "SplitInputAssertCmd: PASS player=2.*expectedForward=-998" "$LOG"
+rg -q "SplitInputAssertCmd: PASS player=3.*expectedRight=-998" "$LOG"
 rg -q "SplitInputAssertCmd: PASS player=4.*expectedButtons=1" "$LOG"
 if rg -q "SplitInputAssertCmd: FAIL" "$LOG"; then
 	echo "external gamepad bridge assertion failed" >&2

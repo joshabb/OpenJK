@@ -2,7 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-BIN="${OPENJK_BIN:-$ROOT/build-arm64-native/openjk.arm64.app/Contents/MacOS/openjk.arm64}"
+BUILD_DIR="${OPENJK_BUILD_DIR:-$ROOT/build-arm64-native}"
+BIN="${OPENJK_BIN:-$BUILD_DIR/openjk.arm64.app/Contents/MacOS/openjk.arm64}"
 BASEPATH="${OPENJK_BASEPATH:-/Users/joshabb/Library/Application Support/Steam/steamapps/common/Jedi Academy/SWJKJA.app/Contents}"
 HOMEPATH="${OPENJK_HOMEPATH:-$ROOT/runtime-home}"
 SIM="$ROOT/tests/splitscreen/external/macos_input_sim"
@@ -11,10 +12,13 @@ LOG="$HOMEPATH/base/qa-logs/external_character_probe.stdout.txt"
 PORT="${OPENJK_VIRTUAL_GAMEPAD_PORT:-29182}"
 
 mkdir -p "$CFG_DST" "$(dirname "$LOG")" "$HOMEPATH/base/screenshots"
+"$ROOT/tests/splitscreen/install_assets.sh" "$HOMEPATH" >/dev/null
 cp "$ROOT/tests/splitscreen/cfg/external_character_probe.cfg" "$CFG_DST/"
-cp "$ROOT/build-arm64-native/codemp/ui/uiarm64.dylib" "$HOMEPATH/base/"
-cp "$ROOT/build-arm64-native/codemp/cgame/cgamearm64.dylib" "$HOMEPATH/base/"
-cp "$ROOT/build-arm64-native/codemp/game/jampgamearm64.dylib" "$HOMEPATH/base/"
+cp "$BUILD_DIR/codemp/ui/uiarm64.dylib" "$HOMEPATH/base/"
+for cgame_module in "$BUILD_DIR"/codemp/cgame/cgame*arm64.dylib; do
+	cp "$cgame_module" "$HOMEPATH/base/"
+done
+cp "$BUILD_DIR/codemp/game/jampgamearm64.dylib" "$HOMEPATH/base/"
 "$ROOT/tests/splitscreen/build_external_input_sim.sh" >/dev/null
 
 OPENJK_VIRTUAL_GAMEPADS=3 OPENJK_VIRTUAL_GAMEPAD_PORT="$PORT" "$BIN" \
@@ -51,7 +55,7 @@ for _ in $(seq 1 1400); do
 		up_sent=1
 	fi
 	if rg -q "ExternalCharacterProbe: READY_CLOSE" "$LOG" 2>/dev/null && [[ $close_sent -eq 0 ]]; then
-		OPENJK_VIRTUAL_GAMEPAD_PORT="$PORT" "$SIM" gamepad 1 button 3 down wait 300 gamepad 1 button 3 up
+		OPENJK_VIRTUAL_GAMEPAD_PORT="$PORT" "$SIM" gamepad 1 button 1 down wait 300 gamepad 1 button 1 up
 		close_sent=1
 	fi
 	if rg -q "ExternalCharacterProbe: READY_OPEN_TOP" "$LOG" 2>/dev/null && [[ $open_top_sent -eq 0 ]]; then
@@ -60,13 +64,13 @@ for _ in $(seq 1 1400); do
 	fi
 	if rg -q "ExternalCharacterProbe: READY_REOPEN" "$LOG" 2>/dev/null && [[ $reopen_sent -eq 0 ]]; then
 		OPENJK_VIRTUAL_GAMEPAD_PORT="$PORT" "$SIM" \
-			gamepad 1 button 12 down wait 300 gamepad 1 button 12 up wait 240 \
-			gamepad 1 button 12 down wait 300 gamepad 1 button 12 up wait 240 \
+			gamepad 1 button 14 down wait 300 gamepad 1 button 14 up wait 240 \
+			gamepad 1 button 14 down wait 300 gamepad 1 button 14 up wait 240 \
 			gamepad 1 button 0 down wait 300 gamepad 1 button 0 up
 		reopen_sent=1
 	fi
 	if rg -q "ExternalCharacterProbe: READY_JOIN" "$LOG" 2>/dev/null && [[ $join_sent -eq 0 ]]; then
-		OPENJK_VIRTUAL_GAMEPAD_PORT="$PORT" "$SIM" gamepad 1 button 3 down wait 300 gamepad 1 button 3 up
+		OPENJK_VIRTUAL_GAMEPAD_PORT="$PORT" "$SIM" gamepad 1 button 6 down wait 300 gamepad 1 button 6 up
 		join_sent=1
 		break
 	fi
@@ -79,6 +83,6 @@ done
 wait "$game_pid"
 trap - EXIT
 rg "ui_splitScreenP[1-4]Model|SplitProfileAssert:|SplitUIStatus:" "$LOG"
-if rg -q "SplitProfileAssert: FAIL|SplitUIAssert: FAIL" "$LOG"; then
+if rg -q "Split(Profile|UI|NetLifecycle)Assert: FAIL" "$LOG"; then
 	exit 1
 fi

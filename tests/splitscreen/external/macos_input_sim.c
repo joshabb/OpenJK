@@ -38,6 +38,7 @@ typedef struct gamepad_packet_s {
 } gamepad_packet_t;
 
 static gamepad_packet_t gamepads[4];
+static gamepad_packet_t system_input;
 
 typedef struct key_map_s {
 	const char *name;
@@ -75,6 +76,8 @@ static void usage( const char *argv0 )
 		"  click <left|right>\n"
 		"  gamepad <1-4> axis <0-5> <-32768..32767>\n"
 		"  gamepad <1-4> button <0-15> <down|up|tap>\n"
+		"  bridge-mouse <left> <down|up|tap>\n"
+		"  bridge-mouse-move <dx> <dy>\n"
 		"  gamepad-demo <ms>   # drive three SDL gamepads through the localhost bridge\n"
 		"  hid-gamepad-demo <ms> # restricted IOHIDUserDevice backend\n"
 		"\n"
@@ -292,6 +295,7 @@ static int send_bridge_gamepad( int controller )
 	struct sockaddr_in address;
 	gamepad_packet_t packet = gamepads[controller];
 	int sock;
+	int attempt;
 	int i;
 	ssize_t sent;
 
@@ -312,12 +316,53 @@ static int send_bridge_gamepad( int controller )
 	address.sin_family = AF_INET;
 	address.sin_addr.s_addr = htonl( INADDR_LOOPBACK );
 	address.sin_port = htons( (uint16_t)bridge_port() );
-	sent = sendto( sock, &packet, sizeof( packet ), 0, (struct sockaddr *)&address, sizeof( address ) );
+	for ( attempt = 0; attempt < 3; ++attempt ) {
+		sent = sendto( sock, &packet, sizeof( packet ), 0, (struct sockaddr *)&address, sizeof( address ) );
+		if ( sent != sizeof( packet ) ) {
+			close( sock );
+			perror( "gamepad bridge send" );
+			return 5;
+		}
+		usleep( 1000 );
+	}
 	close( sock );
-	if ( sent != sizeof( packet ) ) {
-		perror( "gamepad bridge send" );
+	return 0;
+}
+
+static int send_bridge_system_input( void )
+{
+	struct sockaddr_in address;
+	gamepad_packet_t packet = system_input;
+	int sock;
+	int attempt;
+	int i;
+	ssize_t sent;
+
+	packet.magic = htonl( GAMEPAD_MAGIC );
+	packet.version = GAMEPAD_VERSION;
+	packet.controller = 255;
+	packet.buttons = htons( packet.buttons );
+	for ( i = 0; i < GAMEPAD_AXES; ++i ) {
+		packet.axes[i] = (int16_t)htons( (uint16_t)packet.axes[i] );
+	}
+	sock = socket( AF_INET, SOCK_DGRAM, 0 );
+	if ( sock < 0 ) {
+		perror( "system input bridge socket" );
 		return 5;
 	}
+	memset( &address, 0, sizeof( address ) );
+	address.sin_family = AF_INET;
+	address.sin_addr.s_addr = htonl( INADDR_LOOPBACK );
+	address.sin_port = htons( (uint16_t)bridge_port() );
+	for ( attempt = 0; attempt < 3; ++attempt ) {
+		sent = sendto( sock, &packet, sizeof( packet ), 0, (struct sockaddr *)&address, sizeof( address ) );
+		if ( sent != sizeof( packet ) ) {
+			close( sock );
+			return 5;
+		}
+		usleep( 1000 );
+	}
+	close( sock );
 	return 0;
 }
 
@@ -438,6 +483,49 @@ int main( int argc, char **argv )
 			}
 			duration_ms = atoi( argv[i++] );
 			return bridge_gamepad_demo( duration_ms );
+		}
+
+		if ( streq( cmd, "bridge-mouse" ) ) {
+			const char *button;
+			const char *action;
+			if ( i + 1 >= argc ) {
+				usage( argv[0] );
+				return 2;
+			}
+			button = argv[i++];
+			action = argv[i++];
+			if ( !streq( button, "left" ) ) {
+				fprintf( stderr, "bridge mouse button must be left\n" );
+				return 2;
+			}
+			if ( streq( action, "down" ) || streq( action, "tap" ) ) {
+				system_input.buttons |= 1u;
+			} else if ( streq( action, "up" ) ) {
+				system_input.buttons &= (uint16_t)~1u;
+			} else {
+				fprintf( stderr, "bridge mouse action must be down, up, or tap\n" );
+				return 2;
+			}
+			if ( send_bridge_system_input() != 0 ) return 5;
+			if ( streq( action, "tap" ) ) {
+				usleep( GAMEPAD_TAP_USEC );
+				system_input.buttons &= (uint16_t)~1u;
+				if ( send_bridge_system_input() != 0 ) return 5;
+			}
+			continue;
+		}
+
+		if ( streq( cmd, "bridge-mouse-move" ) ) {
+			if ( i + 1 >= argc ) {
+				usage( argv[0] );
+				return 2;
+			}
+			system_input.axes[0] = (int16_t)atoi( argv[i++] );
+			system_input.axes[1] = (int16_t)atoi( argv[i++] );
+			if ( send_bridge_system_input() != 0 ) return 5;
+			system_input.axes[0] = 0;
+			system_input.axes[1] = 0;
+			continue;
 		}
 
 		if ( streq( cmd, "hid-gamepad-demo" ) ) {

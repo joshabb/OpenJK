@@ -12,12 +12,29 @@ tests/splitscreen/run_splitscreen_qa.sh
 tests/splitscreen/run_external_gamepad_qa.sh
 tests/splitscreen/run_external_menu_qa.sh
 tests/splitscreen/run_external_character_qa.sh
+tests/splitscreen/run_external_combat_qa.sh
+tests/splitscreen/run_external_controls_qa.sh
+tests/splitscreen/run_external_lifecycle_qa.sh
+tests/splitscreen/run_external_team_profile_qa.sh
+tests/splitscreen/run_external_topmenu_qa.sh
+tests/splitscreen/run_stock_regression_qa.sh
+tests/splitscreen/run_vanilla_network_qa.sh
+tests/splitscreen/run_performance_qa.sh
+```
+
+The runners install the authored menu files from `assets/splitscreen/base` into
+the selected test home. A clean test home therefore does not depend on files
+left behind by an earlier development session. To install only the assets:
+
+```sh
+tests/splitscreen/install_assets.sh /path/to/test-home
 ```
 
 Useful overrides:
 
 ```sh
 OPENJK_BIN=./build-arm64-native/openjk.arm64.app/Contents/MacOS/openjk.arm64 \
+OPENJK_BUILD_DIR=./build-arm64-native \
 OPENJK_BASEPATH="/Users/joshabb/Library/Application Support/Steam/steamapps/common/Jedi Academy/SWJKJA.app/Contents" \
 OPENJK_HOMEPATH=./runtime-home \
 tests/splitscreen/run_splitscreen_qa.sh local_2p_ffa splitnet_localhost
@@ -82,6 +99,13 @@ external character run traverses the stock portrait grid horizontally and
 vertically, verifies isolation from the other profiles, closes and reopens the
 screen by controller, and confirms the final model in gameplay.
 
+The Phase 5 runners under `phase5` exercise two-, three-, and four-player kill,
+respawn, simultaneous attack, Force, Duel, Power Duel, Siege, and every stock
+multiplayer game type. `run_vanilla_network_qa.sh` puts four clients from one
+split-screen process and a fifth untouched upstream client on an untouched
+upstream dedicated server. `run_performance_qa.sh` records 600 measured frames
+for each player count and checks frame-time, memory, and viewport budgets.
+
 The controller shortcuts used by split-screen players are:
 
 - Start: open that player's stock in-game top menu.
@@ -90,3 +114,7 @@ The controller shortcuts used by split-screen players are:
 - Left shoulder: open the stock saber setup screen.
 - Right shoulder: open the stock Force setup screen.
 - B or Back: cancel or return to the previous split-screen menu.
+
+`stock_host_handoff` verifies that completing split-screen player setup opens the
+stock Create Server workflow and records a pending host operation instead of
+launching a hard-coded map.
