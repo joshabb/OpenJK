@@ -215,24 +215,28 @@ void UI_UpdateClientForcePowers(const char *teamArg)
 		uiForcePowersRank[14], uiForcePowersRank[15], uiForcePowersRank[16],
 		uiForcePowersRank[17]);
 
-	if ( trap->Cvar_VariableValue( "ui_splitScreenProfileTarget" ) >= 2 ) {
+	if ( trap->Cvar_VariableValue( "cl_splitScreen" ) && trap->Cvar_VariableValue( "ui_splitScreenConfiguring" ) &&
+		trap->Cvar_VariableValue( "ui_splitScreenProfileTarget" ) >= 1 ) {
 		int splitTarget = (int)trap->Cvar_VariableValue( "ui_splitScreenProfileTarget" );
 		if ( splitTarget > 4 ) {
 			splitTarget = 4;
 		}
+		trap->Cvar_Set( "forcepowers", forceString );
 		trap->Cvar_Set( va( "ui_splitScreenP%iForcePowers", splitTarget ), forceString );
-		UI_ForceApplySplitScreenPlayerProfile( splitTarget );
-		if ( teamArg && teamArg[0] ) {
-			if ( UI_ForceSplitScreenPlayerHasNetworkClient( splitTarget ) ) {
-				trap->Cmd_ExecuteText( EXEC_APPEND, va( "splitnet_cmd %i team %s\n", splitTarget, teamArg ) );
-			} else if ( !Q_stricmp( teamArg, "s" ) || !Q_stricmp( teamArg, "spectator" ) ) {
-				trap->Cmd_ExecuteText( EXEC_APPEND, va( "cmd splitscreen_spectate %i\n", splitTarget ) );
-			} else {
-				trap->Cmd_ExecuteText( EXEC_APPEND, va( "cmd splitscreen_join %i %s\n", splitTarget, teamArg ) );
+		if ( splitTarget >= 2 ) {
+			UI_ForceApplySplitScreenPlayerProfile( splitTarget );
+			if ( teamArg && teamArg[0] ) {
+				if ( UI_ForceSplitScreenPlayerHasNetworkClient( splitTarget ) ) {
+					trap->Cmd_ExecuteText( EXEC_APPEND, va( "splitnet_cmd %i team %s\n", splitTarget, teamArg ) );
+				} else if ( !Q_stricmp( teamArg, "s" ) || !Q_stricmp( teamArg, "spectator" ) ) {
+					trap->Cmd_ExecuteText( EXEC_APPEND, va( "cmd splitscreen_spectate %i\n", splitTarget ) );
+				} else {
+					trap->Cmd_ExecuteText( EXEC_APPEND, va( "cmd splitscreen_join %i %s\n", splitTarget, teamArg ) );
+				}
 			}
+			gTouchedForce = qfalse;
+			return;
 		}
-		gTouchedForce = qfalse;
-		return;
 	}
 
 	trap->Cvar_Set( "forcepowers", forceString );

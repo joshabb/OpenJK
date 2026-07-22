@@ -2630,6 +2630,10 @@ void CL_InitInput( void ) {
 	Cvar_Get( "ui_splitScreenP1Saber2", "none", CVAR_ARCHIVE_ND, "Split-screen Player 1 secondary saber." );
 	Cvar_Get( "ui_splitScreenP1Color1", "4", CVAR_ARCHIVE_ND, "Split-screen Player 1 saber color 1." );
 	Cvar_Get( "ui_splitScreenP1Color2", "3", CVAR_ARCHIVE_ND, "Split-screen Player 1 saber color 2." );
+	Cvar_Get( "ui_splitScreenP1CharRed", "255", CVAR_ARCHIVE_ND, "Split-screen Player 1 custom character red channel." );
+	Cvar_Get( "ui_splitScreenP1CharGreen", "255", CVAR_ARCHIVE_ND, "Split-screen Player 1 custom character green channel." );
+	Cvar_Get( "ui_splitScreenP1CharBlue", "255", CVAR_ARCHIVE_ND, "Split-screen Player 1 custom character blue channel." );
+	Cvar_Get( "ui_splitScreenP1ForcePowers", DEFAULT_FORCEPOWERS, CVAR_ARCHIVE_ND, "Split-screen Player 1 force power loadout." );
 	Cvar_Get( "ui_splitScreenP2Name", "SplitPlayer2", CVAR_ARCHIVE_ND, "Split-screen Player 2 display name." );
 	Cvar_Get( "ui_splitScreenP2Model", DEFAULT_MODEL"/default", CVAR_ARCHIVE_ND, "Split-screen Player 2 model/skin." );
 	Cvar_Get( "ui_splitScreenP2Saber1", DEFAULT_SABER, CVAR_ARCHIVE_ND, "Split-screen Player 2 primary saber." );

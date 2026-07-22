@@ -79,7 +79,9 @@ for _ in $(seq 1 1800); do
 		force_open_sent=1
 	fi
 	if rg -q "ExternalMenuProbe: READY_FORCE_CHANGE" "$LOG" 2>/dev/null && [[ $force_change_sent -eq 0 ]]; then
-		OPENJK_VIRTUAL_GAMEPAD_PORT="$PORT" "$SIM" gamepad 1 button 12 tap wait 180 gamepad 1 button 0 tap
+		OPENJK_VIRTUAL_GAMEPAD_PORT="$PORT" "$SIM" \
+			gamepad 1 button 12 tap wait 180 gamepad 1 button 12 tap wait 180 \
+			gamepad 1 button 0 tap wait 180 gamepad 1 button 6 tap
 		force_change_sent=1
 	fi
 	if rg -q "ExternalMenuProbe: READY_KEYBOARD_OPEN" "$LOG" 2>/dev/null && [[ $keyboard_open_sent -eq 0 ]]; then

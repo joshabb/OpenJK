@@ -6514,6 +6514,10 @@ static void UI_CopySplitScreenP1ProfileToGameCvars( void )
 	trap->Cvar_Set( "saber2", UI_Cvar_VariableString( "ui_splitScreenP1Saber2" ) );
 	trap->Cvar_Set( "color1", UI_Cvar_VariableString( "ui_splitScreenP1Color1" ) );
 	trap->Cvar_Set( "color2", UI_Cvar_VariableString( "ui_splitScreenP1Color2" ) );
+	trap->Cvar_Set( "char_color_red", UI_Cvar_VariableString( "ui_splitScreenP1CharRed" ) );
+	trap->Cvar_Set( "char_color_green", UI_Cvar_VariableString( "ui_splitScreenP1CharGreen" ) );
+	trap->Cvar_Set( "char_color_blue", UI_Cvar_VariableString( "ui_splitScreenP1CharBlue" ) );
+	trap->Cvar_Set( "forcepowers", UI_Cvar_VariableString( "ui_splitScreenP1ForcePowers" ) );
 }
 
 static void UI_CycleSplitScreenProfileField( int player, const char *field, int direction )
@@ -12468,6 +12472,28 @@ static qboolean UI_FocusSplitScreenPlayerAction( menuDef_t *menu, qboolean spect
 	return qfalse;
 }
 
+static qboolean UI_FocusSplitScreenForceConfig( menuDef_t *menu )
+{
+	int itemIndex;
+
+	for ( itemIndex = 0; menu && itemIndex < menu->itemCount; itemIndex++ ) {
+		itemDef_t *item = menu->items[itemIndex];
+
+		if ( !item || item->special != FEEDER_FORCECFG || item->type != ITEM_TYPE_LISTBOX ) {
+			continue;
+		}
+		if ( !( item->window.flags & WINDOW_HASFOCUS ) &&
+			!Item_SetFocus( item, item->window.rect.x + 1.0f, item->window.rect.y + 1.0f ) ) {
+			continue;
+		}
+		menu->cursorItem = itemIndex;
+		Menu_HandleMouseMove( menu, item->window.rect.x + 1.0f, item->window.rect.y + 1.0f );
+		return qtrue;
+	}
+
+	return qfalse;
+}
+
 static qboolean UI_HandleSplitScreenPlayerSetupKey( int key, qboolean down )
 {
 	menuDef_t *menu;
@@ -12543,8 +12569,20 @@ static qboolean UI_HandleSplitScreenPlayerSetupKey( int key, qboolean down )
 		return qtrue;
 	}
 	if ( key == A_JOY10 ) {
+		menuDef_t *forceMenu;
+
 		Menus_CloseByName( "ingame_saber" );
 		Menus_ActivateByName( "ingame_playerforce" );
+		forceMenu = Menus_FindByName( "ingame_playerforce" );
+		UI_FocusSplitScreenForceConfig( forceMenu );
+		return qtrue;
+	}
+	if ( menu == Menus_FindByName( "ingame_playerforce" ) && rawKey == A_JOY7 ) {
+		int playerTeam = (int)trap->Cvar_VariableValue( "ui_myteam" );
+
+		UI_UpdateClientForcePowers( playerTeam == TEAM_SPECTATOR ? NULL : UI_TeamName( playerTeam ) );
+		Menus_CloseByName( "ingame_playerforce" );
+		Menus_ActivateByName( "ingame_player" );
 		return qtrue;
 	}
 	if ( menu == Menus_FindByName( "ingame_player" ) ) {
@@ -12623,6 +12661,9 @@ static qboolean UI_HandleSplitScreenPlayerSetupKey( int key, qboolean down )
 	uiInfo.uiDC.cursory = menuY;
 	Menu_HandleMouseMove( menu, menuX, menuY );
 	Menu_HandleKey( menu, key, down );
+	if ( menu == Menus_FindByName( "ingame_playerforce" ) ) {
+		UI_UpdateClientForcePowers( NULL );
+	}
 	if ( UI_SplitScreenKeyboardIsNameItem( UI_SplitScreenFocusedItem( menu ) ) ) {
 		UI_OpenSplitScreenKeyboard( player );
 	}
