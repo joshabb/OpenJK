@@ -1180,6 +1180,7 @@ static void CL_SplitInputAssertCmd_f( void )
 	int expectedWeapon = -999;
 	int expectedForce = -999;
 	int expectedGeneric = -999;
+	clientActive_t savedCl;
 	usercmd_t cmd;
 	qboolean pass = qtrue;
 
@@ -1211,7 +1212,11 @@ static void CL_SplitInputAssertCmd_f( void )
 	if ( player == 1 ) {
 		cmd = CL_CreateCmd();
 	} else {
+		savedCl = cl;
+		cl = cl_splitClients[player].active;
 		CL_SplitScreenCreateCmd( player, &cmd );
+		cl_splitClients[player].active = cl;
+		cl = savedCl;
 	}
 
 	if ( !CL_SplitInputExpectedMatches( expectedForward, cmd.forwardmove ) ) {
@@ -1236,7 +1241,7 @@ static void CL_SplitInputAssertCmd_f( void )
 		pass = qfalse;
 	}
 
-	Com_Printf( "SplitInputAssertCmd: %s player=%i expectedForward=%i actualForward=%i expectedRight=%i actualRight=%i expectedUp=%i actualUp=%i expectedButtons=%i actualButtons=%i expectedWeapon=%i actualWeapon=%i expectedForce=%i actualForce=%i expectedGeneric=%i actualGeneric=%i\n",
+	Com_Printf( "SplitInputAssertCmd: %s player=%i expectedForward=%i actualForward=%i expectedRight=%i actualRight=%i expectedUp=%i actualUp=%i expectedButtons=%i actualButtons=%i expectedWeapon=%i actualWeapon=%i expectedForce=%i actualForce=%i expectedGeneric=%i actualGeneric=%i cmdAngles=(%.1f %.1f %.1f)\n",
 		pass ? "PASS" : "FAIL",
 		player,
 		expectedForward,
@@ -1252,7 +1257,10 @@ static void CL_SplitInputAssertCmd_f( void )
 		expectedForce,
 		cmd.forcesel,
 		expectedGeneric,
-		cmd.generic_cmd );
+		cmd.generic_cmd,
+		SHORT2ANGLE( cmd.angles[PITCH] ),
+		SHORT2ANGLE( cmd.angles[YAW] ),
+		SHORT2ANGLE( cmd.angles[ROLL] ) );
 }
 
 static void CL_SplitInputClear_f( void )

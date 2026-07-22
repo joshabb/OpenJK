@@ -57,7 +57,7 @@ rg "Split(NetLifecycle|NetStat|Input)Assert|SplitNetStagePair|ExternalCombatProb
 for marker in READY_P1_ATTACK READY_P2_RESPAWN READY_P2_ATTACK READY_P1_RESPAWN READY_P2_FORCE; do
 	rg -q "ExternalCombatProbe: $marker" "$LOG"
 done
-if rg -q "Split(NetLifecycle|NetStat)Assert: FAIL|SplitInputAssertCmd: FAIL|SplitUIAssert: FAIL|SplitNetStagePair: FAIL" "$LOG"; then
+if rg -q "Split(NetLifecycle|NetStat|ServerCmd)Assert: FAIL|SplitInputAssertCmd: FAIL|SplitUIAssert: FAIL|SplitNetStagePair: FAIL" "$LOG"; then
 	exit 1
 fi
 echo "external split-screen combat QA passed"

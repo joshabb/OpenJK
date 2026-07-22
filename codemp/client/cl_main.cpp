@@ -1586,9 +1586,11 @@ static void CL_SplitNetAssertStat_f( void )
 	else if ( !Q_stricmp( field, "clientnum" ) ) actual = ps->clientNum;
 	else known = qfalse;
 
-	Com_Printf( "SplitNetStatAssert: %s player=%i field=%s op=%s expected=%i actual=%i origin=(%.1f %.1f %.1f)\n",
+	Com_Printf( "SplitNetStatAssert: %s player=%i field=%s op=%s expected=%i actual=%i origin=(%.1f %.1f %.1f) viewangles=(%.1f %.1f %.1f) delta=(%.1f %.1f %.1f)\n",
 		known && CL_SplitNetCompareStat( actual, op, expected ) ? "PASS" : "FAIL",
-		player, field, op, expected, actual, ps->origin[0], ps->origin[1], ps->origin[2] );
+		player, field, op, expected, actual, ps->origin[0], ps->origin[1], ps->origin[2],
+		ps->viewangles[PITCH], ps->viewangles[YAW], ps->viewangles[ROLL],
+		SHORT2ANGLE( ps->delta_angles[PITCH] ), SHORT2ANGLE( ps->delta_angles[YAW] ), SHORT2ANGLE( ps->delta_angles[ROLL] ) );
 }
 
 static void CL_SplitNetSendPlayerServerCommand( int player, const char *command )
@@ -1602,12 +1604,10 @@ static void CL_SplitNetSendPlayerServerCommand( int player, const char *command 
 
 static void CL_SplitNetStagePair_f( void )
 {
-	const playerState_t *anchor;
 	float separation = 44.0f;
 	float magnitude;
 	int attacker;
 	int victim;
-	vec3_t origin;
 
 	if ( Cmd_Argc() < 3 || Cmd_Argc() > 4 ) {
 		Com_Printf( "usage: splitnet_stage_pair <attacker 1-4> <victim 1-4> [signed separation]\n" );
@@ -1619,18 +1619,11 @@ static void CL_SplitNetStagePair_f( void )
 		separation = (float)atof( Cmd_Argv( 3 ) );
 	}
 	magnitude = separation < 0.0f ? -separation : separation;
-	anchor = CL_SplitNetPlayerState( attacker );
-	if ( !anchor || !CL_SplitNetPlayerState( victim ) || attacker == victim || magnitude < 24.0f || magnitude > 96.0f ) {
+	if ( !CL_SplitNetPlayerState( attacker ) || !CL_SplitNetPlayerState( victim ) || attacker == victim || magnitude < 40.0f || magnitude > 128.0f ) {
 		Com_Printf( "SplitNetStagePair: FAIL attacker=%i victim=%i separation=%.1f\n", attacker, victim, separation );
 		return;
 	}
-	VectorCopy( anchor->origin, origin );
-	CL_SplitNetSendPlayerServerCommand( victim, va( "setviewpos %.1f %.1f %.1f %.0f", origin[0] + separation,
-		origin[1], origin[2], separation < 0.0f ? 0.0f : 180.0f ) );
-	CL_SplitNetSendPlayerServerCommand( attacker, va( "setviewpos %.1f %.1f %.1f %.0f", origin[0], origin[1], origin[2],
-		separation < 0.0f ? 180.0f : 0.0f ) );
-	Com_Printf( "SplitNetStagePair: PASS attacker=%i victim=%i separation=%.1f origin=(%.1f %.1f %.1f)\n",
-		attacker, victim, separation, origin[0], origin[1], origin[2] );
+	CL_SplitNetSendPlayerServerCommand( 1, va( "splitscreen_stage_pair %i %i %.1f", attacker, victim, separation ) );
 }
 
 static void CL_SplitNetAssertState_f( void )

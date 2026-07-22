@@ -3782,6 +3782,165 @@ static void Cmd_SplitScreenAssertState_f( gentity_t *ent ) {
 	G_LogPrintf( "SplitStateAssert: %s player=%i expectedTeam=%s actualTeam=%s expectedSpectator=%s actualSpectator=%i\n", result, player, expectedTeam, actualTeam, expectedSpectator, spectator );
 }
 
+static gentity_t *G_SplitScreenPlayerEntity( gentity_t *owner, int player ) {
+	int clientNum;
+
+	if ( player == 1 ) {
+		return owner;
+	}
+	clientNum = G_FindSplitScreenClient( player );
+	return clientNum >= 0 ? &g_entities[clientNum] : NULL;
+}
+
+static void G_SplitScreenFinishStage( gentity_t *player, const vec3_t origin, const vec3_t angles ) {
+	vec3_t stagedAngles;
+	vec3_t stagedOrigin;
+
+	VectorCopy( angles, stagedAngles );
+	VectorCopy( origin, stagedOrigin );
+	TeleportPlayer( player, stagedOrigin, stagedAngles );
+	VectorClear( player->client->ps.velocity );
+	player->client->ps.pm_time = 0;
+	player->client->ps.pm_flags &= ~PMF_TIME_KNOCKBACK;
+	BG_PlayerStateToEntityState( &player->client->ps, &player->s, qtrue );
+}
+
+static void Cmd_SplitScreenStagePair_f( gentity_t *ent ) {
+	static const vec2_t positiveDirections[4] = {
+		{ 1.0f, 0.0f }, { 0.0f, 1.0f }, { -1.0f, 0.0f }, { 0.0f, -1.0f }
+	};
+	static const vec2_t negativeDirections[4] = {
+		{ -1.0f, 0.0f }, { 0.0f, -1.0f }, { 1.0f, 0.0f }, { 0.0f, 1.0f }
+	};
+	static const char *spawnClasses[] = {
+		"info_player_deathmatch", "info_player_start", "info_player_duel1", "info_player_duel2"
+	};
+	const vec2_t *directions;
+	gentity_t *attackerEnt;
+	gentity_t *spot;
+	gentity_t *victimEnt;
+	float distance;
+	float magnitude;
+	float yaw = 0.0f;
+	int attacker;
+	int classIndex;
+	int direction;
+	int victim;
+	qboolean found = qfalse;
+	trace_t trace;
+	vec3_t attackerAngles;
+	vec3_t attackerOrigin;
+	vec3_t down;
+	vec3_t eyeStart;
+	vec3_t eyeEnd;
+	vec3_t victimAngles;
+	vec3_t victimOrigin;
+	vec3_t test;
+	char arg[MAX_TOKEN_CHARS];
+
+	if ( !ent || !ent->client || !ent->client->pers.localClient || trap->Argc() != 4 ) {
+		return;
+	}
+	trap->Argv( 1, arg, sizeof( arg ) );
+	attacker = atoi( arg );
+	trap->Argv( 2, arg, sizeof( arg ) );
+	victim = atoi( arg );
+	trap->Argv( 3, arg, sizeof( arg ) );
+	distance = atof( arg );
+	magnitude = fabsf( distance );
+	attackerEnt = G_SplitScreenPlayerEntity( ent, attacker );
+	victimEnt = G_SplitScreenPlayerEntity( ent, victim );
+	if ( attacker < 1 || attacker > 4 || victim < 1 || victim > 4 || attacker == victim ||
+		!attackerEnt || !victimEnt || magnitude < 40.0f || magnitude > 128.0f ) {
+		trap->SendServerCommand( ent->s.number, va( "print \"SplitNetStagePair: FAIL attacker=%i victim=%i separation=%.1f invalid players or distance\n\"", attacker, victim, distance ) );
+		return;
+	}
+	directions = distance < 0.0f ? negativeDirections : positiveDirections;
+
+	for ( classIndex = 0; classIndex < (int)ARRAY_LEN( spawnClasses ) && !found; classIndex++ ) {
+		spot = NULL;
+		while ( ( spot = G_Find( spot, FOFS( classname ), spawnClasses[classIndex] ) ) != NULL && !found ) {
+			VectorCopy( spot->s.origin, attackerOrigin );
+			attackerOrigin[2] += 9.0f;
+			trap->Trace( &trace, attackerOrigin, attackerEnt->r.mins, attackerEnt->r.maxs, attackerOrigin,
+				attackerEnt->s.number, MASK_PLAYERSOLID, qfalse, 0, 0 );
+			if ( trace.startsolid || trace.allsolid ) {
+				continue;
+			}
+
+			for ( direction = 0; direction < 4; direction++ ) {
+				VectorCopy( attackerOrigin, test );
+				test[0] += directions[direction][0] * magnitude;
+				test[1] += directions[direction][1] * magnitude;
+				test[2] += 64.0f;
+				VectorCopy( test, down );
+				down[2] -= 192.0f;
+				trap->Trace( &trace, test, victimEnt->r.mins, victimEnt->r.maxs, down,
+					victimEnt->s.number, MASK_PLAYERSOLID, qfalse, 0, 0 );
+				if ( trace.startsolid || trace.allsolid || trace.fraction >= 1.0f ||
+					fabsf( trace.endpos[2] - attackerOrigin[2] ) > 12.0f ) {
+					continue;
+				}
+				VectorCopy( trace.endpos, victimOrigin );
+
+				VectorCopy( attackerOrigin, eyeStart );
+				VectorCopy( victimOrigin, eyeEnd );
+				eyeStart[2] += attackerEnt->client->ps.viewheight;
+				eyeEnd[2] += victimEnt->client->ps.viewheight;
+				trap->Trace( &trace, eyeStart, NULL, NULL, eyeEnd, attackerEnt->s.number, MASK_SHOT, qfalse, 0, 0 );
+				if ( trace.fraction < 1.0f && trace.entityNum != victimEnt->s.number ) {
+					continue;
+				}
+
+				yaw = RAD2DEG( atan2f( directions[direction][1], directions[direction][0] ) );
+				found = qtrue;
+				break;
+			}
+		}
+	}
+
+	if ( !found ) {
+		trap->SendServerCommand( ent->s.number, va( "print \"SplitNetStagePair: FAIL attacker=%i victim=%i separation=%.1f no safe spawn lane\n\"", attacker, victim, distance ) );
+		return;
+	}
+
+	VectorClear( attackerAngles );
+	attackerAngles[YAW] = AngleNormalize360( yaw );
+	VectorClear( victimAngles );
+	victimAngles[YAW] = AngleNormalize360( yaw + 180.0f );
+	G_SplitScreenFinishStage( attackerEnt, attackerOrigin, attackerAngles );
+	G_SplitScreenFinishStage( victimEnt, victimOrigin, victimAngles );
+	trap->SendServerCommand( ent->s.number, va( "print \"SplitNetStagePair: PASS attacker=%i victim=%i separation=%.1f origin=(%.1f %.1f %.1f) victim=(%.1f %.1f %.1f) yaw=%.0f\n\"",
+		attacker, victim, distance, attackerOrigin[0], attackerOrigin[1], attackerOrigin[2],
+		victimOrigin[0], victimOrigin[1], victimOrigin[2], yaw ) );
+}
+
+static void Cmd_SplitScreenAssertCmd_f( gentity_t *ent ) {
+	gentity_t *playerEnt;
+	int expectedButtons;
+	int expectedWeapon;
+	int player;
+	char arg[MAX_TOKEN_CHARS];
+
+	if ( !ent || !ent->client || !ent->client->pers.localClient || trap->Argc() != 4 ) {
+		return;
+	}
+	trap->Argv( 1, arg, sizeof( arg ) );
+	player = atoi( arg );
+	trap->Argv( 2, arg, sizeof( arg ) );
+	expectedButtons = atoi( arg );
+	trap->Argv( 3, arg, sizeof( arg ) );
+	expectedWeapon = atoi( arg );
+	playerEnt = G_SplitScreenPlayerEntity( ent, player );
+	if ( !playerEnt ) {
+		trap->SendServerCommand( ent->s.number, va( "print \"SplitServerCmdAssert: FAIL player=%i not connected\n\"", player ) );
+		return;
+	}
+	trap->SendServerCommand( ent->s.number, va( "print \"SplitServerCmdAssert: %s player=%i expectedButtons=%i actualButtons=%i expectedWeapon=%i actualWeapon=%i\n\"",
+		playerEnt->client->pers.cmd.buttons == expectedButtons && playerEnt->client->pers.cmd.weapon == expectedWeapon ? "PASS" : "FAIL",
+		player, expectedButtons, playerEnt->client->pers.cmd.buttons, expectedWeapon, playerEnt->client->pers.cmd.weapon ) );
+}
+
 static void Cmd_SplitScreenPlace_f( gentity_t *ent ) {
 	int clientNum;
 	int player;
@@ -3984,6 +4143,7 @@ command_t commands[] = {
 	{ "setviewpos",			Cmd_SetViewpos_f,			CMD_CHEAT|CMD_NOINTERMISSION },
 	{ "siegeclass",			Cmd_SiegeClass_f,			CMD_NOINTERMISSION },
 	{ "splitscreen_applyprofile",	Cmd_SplitScreenApplyProfile_f,	0 },
+	{ "splitscreen_assert_cmd", Cmd_SplitScreenAssertCmd_f, CMD_CHEAT|CMD_NOINTERMISSION },
 	{ "splitscreen_assert_state",	Cmd_SplitScreenAssertState_f,	0 },
 	{ "splitscreen_assert_userinfo",	Cmd_SplitScreenAssertUserinfo_f,	0 },
 	{ "splitscreen_cmd",	Cmd_SplitScreenCmd_f,		0 },
@@ -3991,6 +4151,7 @@ command_t commands[] = {
 	{ "splitscreen_leave",	Cmd_SplitScreenLeave_f,		0 },
 	{ "splitscreen_place",	Cmd_SplitScreenPlace_f,		CMD_CHEAT|CMD_NOINTERMISSION },
 	{ "splitscreen_spectate",	Cmd_SplitScreenSpectate_f,	0 },
+	{ "splitscreen_stage_pair", Cmd_SplitScreenStagePair_f, CMD_CHEAT|CMD_NOINTERMISSION },
 	{ "splitscreen_status",	Cmd_SplitScreenStatus_f,		0 },
 	{ "team",				Cmd_Team_f,					CMD_NOINTERMISSION },
 //	{ "teamtask",			Cmd_TeamTask_f,				CMD_NOINTERMISSION },
