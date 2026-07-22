@@ -46,6 +46,8 @@ local.properties
 # Build results
 [Dd]ebug/
 [Rr]elease/
+!scripts/release/
+!scripts/release/*.sh
 [Ff]inal/
 [Ff]inal[Bb]uild/
 *_i.c
@@ -194,3 +196,6 @@ compile_commands.json
 #############
 [Bb]uild*/
 cmake-build-*
+
+# Local split-screen test homes contain player configs, logs, and screenshots.
+runtime-home/

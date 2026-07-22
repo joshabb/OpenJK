@@ -8457,7 +8457,9 @@ void CG_DrawActive( stereoFrame_t stereoView ) {
 
 
 	// clear around the rendered view if sized down
-	CG_TileClear();
+	if ( !cl_splitScreen.integer ) {
+		CG_TileClear();
+	}
 
 	// offset vieworg appropriately if we're doing stereo separation
 	VectorCopy( cg.refdef.vieworg, baseOrg );
@@ -8484,4 +8486,3 @@ void CG_DrawActive( stereoFrame_t stereoView ) {
 		CG_DrawActive2D();
 	}
 }
-

@@ -1,0 +1,29 @@
+{
+	menuDef
+	{
+		name					"splitscreen_players"
+		visible					0
+		fullscreen				1
+		rect					0 0 640 480
+		focusColor				1 1 1 1
+
+		onOpen
+		{
+			setcvar				"ui_splitScreenConfiguring" "1" ;
+			setcvar				"ui_splitScreenMenuMode" "setup" ;
+			setcvar				"ui_splitScreenProfileTarget" "1" ;
+			uiScript			SplitScreenLoadProfile 1 ;
+			uiScript			getsaberhiltinfo ;
+		}
+
+		onClose
+		{
+		}
+
+		onESC
+		{
+			close				splitscreen_players ;
+			open				splitscreen_start
+		}
+	}
+}

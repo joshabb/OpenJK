@@ -250,16 +250,19 @@ typedef struct clientConnection_s {
 
 extern	clientConnection_t clc;
 extern	qboolean cl_splitNetParsingPacket;
+extern	int cl_splitNetParsingPlayer;
 
 #define	MAX_SPLITSCREEN_PLAYERS	4
 
 typedef struct splitScreenClient_s {
 	qboolean			enabled;
 	qboolean			wantsConnect;
+	qboolean			receivedGameState;
+	qboolean			cgameStarted;
+	qboolean			cgameNeedsRestart;
 	int					player;
 	int					qport;
 	connstate_t			state;
-	qboolean			sentInitialJoin;
 	char				servername[MAX_OSPATH];
 	clientActive_t		active;
 	clientConnection_t	connection;
@@ -617,10 +620,16 @@ void CIN_CloseAllVideos(void);
 // cl_cgame.c
 //
 void CL_InitCGame( void );
+void CL_InitCGamePlayer( int player );
 void CL_ShutdownCGame( void );
+void CL_ShutdownSplitCGame( int player );
 qboolean CL_GameCommand( void );
 void CL_CGameRendering( stereoFrame_t stereo );
 void CL_SetCGameTime( void );
+void CL_SplitCGameFrame( void );
+void CL_SplitNetNotifyGameState( void );
+qboolean CL_SplitNetSuppressAutomaticMenu( int player, int menuID );
+void CL_CGameKeyEventForPlayer( int player, int key, qboolean down );
 void CL_FirstSnapshot( void );
 void CL_ShaderStateChanged(void);
 
@@ -631,6 +640,9 @@ void CL_InitUI( void );
 void CL_ShutdownUI( void );
 int Key_GetCatcher( void );
 void Key_SetCatcher( int catcher );
+int Key_GetCatcherForPlayer( int player );
+void Key_SetCGameCatcher( int player, int catcher );
+void CL_SplitScreenKeyEvent( int player, int key, qboolean down, unsigned time );
 void LAN_LoadCachedServers();
 void LAN_SaveServersToCache();
 

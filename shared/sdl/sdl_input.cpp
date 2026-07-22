@@ -62,6 +62,7 @@ typedef struct splitVirtualGamepadPacket_s
 static int splitVirtualGamepadSocket = -1;
 static int splitVirtualGamepadCount = 0;
 static int splitVirtualGamepadDeviceIndex[MAX_SPLITSCREEN_JOYSTICKS];
+static Uint16 splitVirtualSystemButtons = 0;
 
 static void IN_ShutdownVirtualGamepads( void )
 {
@@ -139,14 +140,31 @@ static void IN_PollVirtualGamepads( void )
 		Uint16 buttons;
 		int i;
 		if ( received != sizeof( packet ) || ntohl( packet.magic ) != SPLIT_VIRTUAL_GAMEPAD_MAGIC ||
-			packet.version != SPLIT_VIRTUAL_GAMEPAD_VERSION || packet.controller >= splitVirtualGamepadCount ) {
+			packet.version != SPLIT_VIRTUAL_GAMEPAD_VERSION ) {
+			continue;
+		}
+		buttons = ntohs( packet.buttons );
+		if ( packet.controller == 255 ) {
+			Uint16 changed = buttons ^ splitVirtualSystemButtons;
+			int mouseX = (Sint16)ntohs( (Uint16)packet.axes[0] );
+			int mouseY = (Sint16)ntohs( (Uint16)packet.axes[1] );
+			if ( mouseX || mouseY ) {
+				Sys_QueEvent( 0, SE_MOUSE, mouseX, mouseY, 0, NULL );
+			}
+			if ( changed & 1u ) {
+				Sys_QueEvent( 0, SE_KEY, A_MOUSE1, ( buttons & 1u ) ? qtrue : qfalse, 0, NULL );
+			}
+			splitVirtualSystemButtons = buttons;
+			Com_DPrintf( "External system input bridge: mouseButtons=0x%04x dx=%d dy=%d\n", buttons, mouseX, mouseY );
+			continue;
+		}
+		if ( packet.controller >= splitVirtualGamepadCount ) {
 			continue;
 		}
 		joystick = SDL_JoystickOpen( splitVirtualGamepadDeviceIndex[packet.controller] );
 		if ( !joystick ) {
 			continue;
 		}
-		buttons = ntohs( packet.buttons );
 		Com_DPrintf( "External gamepad bridge: controller=%d buttons=0x%04x axis0=%d axis1=%d\n",
 			packet.controller + 1, buttons, (Sint16)ntohs( (Uint16)packet.axes[0] ),
 			(Sint16)ntohs( (Uint16)packet.axes[1] ) );
@@ -708,7 +726,7 @@ static int IN_SplitScreenPlayerForJoystickSlot( int joystickSlot )
 		playerCount = 4;
 	}
 
-	for ( player = 2; player <= playerCount; player++ ) {
+	for ( player = 1; player <= playerCount; player++ ) {
 		if ( IN_SplitScreenInputJoystickIndex( player ) == joystickSlot ) {
 			return player;
 		}
@@ -722,23 +740,43 @@ static qboolean IN_SplitScreenLegacyJoystickFeedsPlayerOne( void )
 	if ( !Cvar_VariableIntegerValue( "cl_splitScreen" ) ) {
 		return qtrue;
 	}
-	if ( !in_joystickNo ) {
-		return qfalse;
-	}
-#if !defined(_JK2EXE) && !defined(DEDICATED)
-	if ( IN_SplitScreenPlayerForJoystickSlot( in_joystickNo->integer ) > 1 ) {
-		return qfalse;
-	}
-#endif
-	return (qboolean)( IN_SplitScreenInputJoystickIndex( 1 ) == in_joystickNo->integer );
+	return qfalse;
 }
 
 #if !defined(_JK2EXE) && !defined(DEDICATED)
+static qboolean IN_SplitScreenCanInteractWithActiveMenu( int player )
+{
+	char mode[32];
+	int target;
+
+	Cvar_VariableStringBuffer( "ui_splitScreenMenuMode", mode, sizeof( mode ) );
+	target = Cvar_VariableIntegerValue( "ui_splitScreenInputTarget" );
+	if ( !mode[0] || target <= 0 || target == player ) {
+		return qtrue;
+	}
+
+	// The pre-match grid intentionally allows each assigned device to move its
+	// own profile.  Once setup was opened from an in-game top menu, its owner is
+	// locked just like every other in-game submenu.
+	if ( !Q_stricmp( mode, "setup" ) && !Cvar_VariableIntegerValue( "ui_splitScreenSetupFromTop" ) ) {
+		return qtrue;
+	}
+
+	return qfalse;
+}
+
 static void IN_QueueSplitScreenUIKey( int player, int key, qboolean down )
 {
 	char inputName[32] = {0};
 
-	if ( !( Key_GetCatcher() & KEYCATCH_UI ) ) {
+	if ( !( Key_GetCatcherForPlayer( player ) & ( KEYCATCH_UI | KEYCATCH_CGAME | KEYCATCH_CONSOLE ) ) ) {
+		return;
+	}
+	if ( ( Key_GetCatcherForPlayer( player ) & KEYCATCH_UI ) && !IN_SplitScreenCanInteractWithActiveMenu( player ) ) {
+		if ( Cvar_VariableIntegerValue( "ui_splitScreenTraceInput" ) && down ) {
+			Com_Printf( "SplitInputTrace: ignored UI key player=%i owner=%i key=%i\n",
+				player, Cvar_VariableIntegerValue( "ui_splitScreenInputTarget" ), key );
+		}
 		return;
 	}
 
@@ -750,7 +788,7 @@ static void IN_QueueSplitScreenUIKey( int player, int key, qboolean down )
 	if ( Cvar_VariableIntegerValue( "ui_splitScreenTraceInput" ) ) {
 		Com_Printf( "SplitInputTrace: SDL queue player=%i key=%i down=%i catcher=%i\n", player, key, down ? 1 : 0, Key_GetCatcher() );
 	}
-	Sys_QueEvent( 0, SE_KEY, key, down, 0, NULL );
+	CL_SplitScreenKeyEvent( player, key, down, 0 );
 }
 
 static qboolean IN_SplitScreenControlsAwaitingGamepadBind( void )
@@ -767,7 +805,7 @@ static qboolean IN_SplitScreenControlsAwaitingGamepadBind( void )
 
 static void IN_UpdateSplitScreenControllerUIEvents( int player, int slot, SDL_Joystick *controller )
 {
-	qboolean uiActive = (qboolean)( Key_GetCatcher() & KEYCATCH_UI );
+	qboolean uiActive = (qboolean)( Key_GetCatcherForPlayer( player ) & ( KEYCATCH_UI | KEYCATCH_CGAME ) );
 	int i;
 	int total;
 	int axes = 0;
@@ -810,20 +848,20 @@ static void IN_UpdateSplitScreenControllerUIEvents( int player, int slot, SDL_Jo
 				IN_QueueSplitScreenUIKey( player, A_ENTER, pressed );
 				break;
 			case 1:
-				IN_QueueSplitScreenUIKey( player, A_BACKSPACE, pressed );
+				IN_QueueSplitScreenUIKey( player, A_ESCAPE, pressed );
 				break;
 			case 2:
-				if ( pressed ) {
+				if ( pressed && IN_SplitScreenCanInteractWithActiveMenu( player ) ) {
 					Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
 					Cvar_Set( "ui_splitScreenInputTarget", va( "%i", player ) );
 					Cvar_Set( "ui_splitScreenKeyboardOpen", va( "%i", player ) );
 				}
 				break;
 			case 3:
-				IN_QueueSplitScreenUIKey( player, A_ESCAPE, pressed );
+				IN_QueueSplitScreenUIKey( player, A_JOY3, pressed );
 				break;
 			case 7:
-				IN_QueueSplitScreenUIKey( player, A_ENTER, pressed );
+				IN_QueueSplitScreenUIKey( player, A_JOY7, pressed );
 				break;
 			case 11:
 				IN_QueueSplitScreenUIKey( player, A_CURSOR_UP, pressed );
@@ -905,33 +943,7 @@ static void IN_UpdateSplitScreenControllerUIEvents( int player, int slot, SDL_Jo
 
 static void IN_UpdateSplitScreenGamepadUIEvents( int player, int slot, SDL_GameController *gamepad )
 {
-	qboolean uiActive = (qboolean)( Key_GetCatcher() & KEYCATCH_UI );
-	static const SDL_GameControllerButton buttonMap[] = {
-		SDL_CONTROLLER_BUTTON_A,
-		SDL_CONTROLLER_BUTTON_B,
-		SDL_CONTROLLER_BUTTON_X,
-		SDL_CONTROLLER_BUTTON_Y,
-		SDL_CONTROLLER_BUTTON_START,
-		SDL_CONTROLLER_BUTTON_DPAD_UP,
-		SDL_CONTROLLER_BUTTON_DPAD_DOWN,
-		SDL_CONTROLLER_BUTTON_DPAD_LEFT,
-		SDL_CONTROLLER_BUTTON_DPAD_RIGHT,
-		SDL_CONTROLLER_BUTTON_LEFTSHOULDER,
-		SDL_CONTROLLER_BUTTON_RIGHTSHOULDER
-	};
-	static const int keyMap[] = {
-		A_ENTER,
-		A_BACKSPACE,
-		0,
-		A_ESCAPE,
-		A_ENTER,
-		A_CURSOR_UP,
-		A_CURSOR_DOWN,
-		A_CURSOR_LEFT,
-		A_CURSOR_RIGHT,
-		A_JOY9,
-		A_JOY10
-	};
+	qboolean uiActive = (qboolean)( Key_GetCatcherForPlayer( player ) & ( KEYCATCH_UI | KEYCATCH_CGAME ) );
 	int i;
 	int axes = 0;
 	stick_state_s *state;
@@ -941,8 +953,9 @@ static void IN_UpdateSplitScreenGamepadUIEvents( int player, int slot, SDL_GameC
 	}
 
 	state = &stick_state[slot + 1];
-	for ( i = 0; i < (int)ARRAY_LEN( buttonMap ); i++ ) {
-		qboolean pressed = (qboolean)( SDL_GameControllerGetButton( gamepad, buttonMap[i] ) != 0 );
+	for ( i = 0; i < 16 && i < SDL_CONTROLLER_BUTTON_MAX; i++ ) {
+		SDL_GameControllerButton button = (SDL_GameControllerButton)i;
+		qboolean pressed = (qboolean)( SDL_GameControllerGetButton( gamepad, button ) != 0 );
 
 		if ( pressed == state->buttons[i] ) {
 			continue;
@@ -951,7 +964,7 @@ static void IN_UpdateSplitScreenGamepadUIEvents( int player, int slot, SDL_GameC
 			state->buttons[i] = pressed;
 			continue;
 		}
-		if ( buttonMap[i] == SDL_CONTROLLER_BUTTON_START && splitMenuOpenedByButton[slot] ) {
+		if ( button == SDL_CONTROLLER_BUTTON_START && splitMenuOpenedByButton[slot] ) {
 			if ( !pressed ) {
 				splitMenuOpenedByButton[slot] = qfalse;
 			}
@@ -961,14 +974,30 @@ static void IN_UpdateSplitScreenGamepadUIEvents( int player, int slot, SDL_GameC
 
 		if ( IN_SplitScreenControlsAwaitingGamepadBind() && i < 16 ) {
 			IN_QueueSplitScreenUIKey( player, A_JOY0 + i, pressed );
-		} else if ( buttonMap[i] == SDL_CONTROLLER_BUTTON_X ) {
-			if ( pressed ) {
+		} else if ( button == SDL_CONTROLLER_BUTTON_X ) {
+			if ( pressed && IN_SplitScreenCanInteractWithActiveMenu( player ) ) {
 				Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
 				Cvar_Set( "ui_splitScreenInputTarget", va( "%i", player ) );
 				Cvar_Set( "ui_splitScreenKeyboardOpen", va( "%i", player ) );
 			}
-		} else if ( keyMap[i] ) {
-			IN_QueueSplitScreenUIKey( player, keyMap[i], pressed );
+		} else {
+			int key = 0;
+			switch ( button ) {
+			case SDL_CONTROLLER_BUTTON_A: key = A_ENTER; break;
+			case SDL_CONTROLLER_BUTTON_B: key = A_ESCAPE; break;
+			case SDL_CONTROLLER_BUTTON_Y: key = A_JOY3; break;
+			case SDL_CONTROLLER_BUTTON_START: key = A_JOY7; break;
+			case SDL_CONTROLLER_BUTTON_DPAD_UP: key = A_CURSOR_UP; break;
+			case SDL_CONTROLLER_BUTTON_DPAD_DOWN: key = A_CURSOR_DOWN; break;
+			case SDL_CONTROLLER_BUTTON_DPAD_LEFT: key = A_CURSOR_LEFT; break;
+			case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: key = A_CURSOR_RIGHT; break;
+			case SDL_CONTROLLER_BUTTON_LEFTSHOULDER: key = A_JOY9; break;
+			case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: key = A_JOY10; break;
+			default: break;
+			}
+			if ( key ) {
+				IN_QueueSplitScreenUIKey( player, key, pressed );
+			}
 		}
 
 		state->buttons[i] = pressed;
@@ -1001,6 +1030,16 @@ static void IN_UpdateSplitScreenGamepadUIEvents( int player, int slot, SDL_GameC
 #endif
 
 #if !defined(_JK2EXE) && !defined(DEDICATED)
+static qboolean IN_SplitScreenPlayerHasActiveMenu( int player )
+{
+	char mode[32];
+	int target;
+
+	Cvar_VariableStringBuffer( "ui_splitScreenMenuMode", mode, sizeof( mode ) );
+	target = Cvar_VariableIntegerValue( "ui_splitScreenInputTarget" );
+	return (qboolean)( mode[0] && target == player );
+}
+
 static void IN_UpdateSplitScreenControllerState( void )
 {
 	int slot;
@@ -1012,7 +1051,7 @@ static void IN_UpdateSplitScreenControllerState( void )
 		return;
 	}
 
-	for ( player = 2; player <= 4; player++ )
+	for ( player = 1; player <= 4; player++ )
 	{
 		for ( i = 0; i < MAX_JOYSTICK_AXIS; i++ )
 		{
@@ -1032,7 +1071,7 @@ static void IN_UpdateSplitScreenControllerState( void )
 		}
 
 		player = IN_SplitScreenPlayerForJoystickSlot( slot );
-		if ( player < 2 || player > 4 ) {
+		if ( player < 1 || player > 4 ) {
 			continue;
 		}
 
@@ -1055,10 +1094,20 @@ static void IN_UpdateSplitScreenControllerState( void )
 		if ( total > 16 ) {
 			total = 16;
 		}
-		for ( i = 0; i < total; i++ )
-		{
-			qboolean pressed = (qboolean)( SDL_JoystickGetButton( controller, i ) != 0 );
-			CL_SplitScreenSetControllerButton( player, i, pressed );
+		if ( splitGamepads[slot] ) {
+			total = SDL_CONTROLLER_BUTTON_MAX;
+			if ( total > 16 ) {
+				total = 16;
+			}
+			for ( i = 0; i < total; i++ ) {
+				qboolean pressed = (qboolean)( SDL_GameControllerGetButton( splitGamepads[slot], (SDL_GameControllerButton)i ) != 0 );
+				CL_SplitScreenSetControllerButton( player, i, pressed );
+			}
+		} else {
+			for ( i = 0; i < total; i++ ) {
+				qboolean pressed = (qboolean)( SDL_JoystickGetButton( controller, i ) != 0 );
+				CL_SplitScreenSetControllerButton( player, i, pressed );
+			}
 		}
 
 		{
@@ -1068,11 +1117,18 @@ static void IN_UpdateSplitScreenControllerState( void )
 			qboolean menuPressed = splitGamepads[slot]
 				? (qboolean)( SDL_GameControllerGetButton( splitGamepads[slot], SDL_CONTROLLER_BUTTON_START ) != 0 )
 				: (qboolean)( SDL_JoystickNumButtons( controller ) > 7 && SDL_JoystickGetButton( controller, 7 ) != 0 );
-			if ( menuPressed && !backPressed && !splitMenuButtonDown[slot] && !( Key_GetCatcher() & KEYCATCH_UI ) ) {
+			if ( menuPressed != splitMenuButtonDown[slot] && Cvar_VariableIntegerValue( "ui_splitScreenTraceInput" ) ) {
+				Com_Printf( "SplitInputTrace: menu edge player=%i slot=%i pressed=%i prior=%i back=%i catcher=%i\n",
+					player, slot + 1, menuPressed ? 1 : 0, splitMenuButtonDown[slot] ? 1 : 0,
+					backPressed ? 1 : 0, Key_GetCatcherForPlayer( player ) );
+			}
+			if ( menuPressed && !backPressed && !splitMenuButtonDown[slot] &&
+				!( Key_GetCatcherForPlayer( player ) & KEYCATCH_CONSOLE ) &&
+				!IN_SplitScreenPlayerHasActiveMenu( player ) ) {
 				Com_DPrintf( "Split-screen controller slot %d opening top menu for player %d\n", slot + 1, player );
 				memset( stick_state[slot + 1].buttons, 0, sizeof( stick_state[slot + 1].buttons ) );
 				splitMenuOpenedByButton[slot] = qtrue;
-				Cbuf_ExecuteText( EXEC_INSERT, va( "splitscreen_topmenu %i\n", player ) );
+				Cbuf_ExecuteText( EXEC_NOW, va( "splitscreen_topmenu %i\n", player ) );
 			}
 			splitMenuButtonDown[slot] = menuPressed;
 		}

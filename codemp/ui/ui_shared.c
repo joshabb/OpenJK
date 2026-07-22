@@ -4924,23 +4924,43 @@ static int SplitScreenControllerBindIndexFromName( const char *command ) {
 }
 
 static int SplitScreenDefaultControllerBindForCommand( const char *command, int bindIndex ) {
+	(void)bindIndex;
 	if ( !Q_stricmp( command, "+attack" ) ) return 0;
 	if ( !Q_stricmp( command, "+altattack" ) ) return 1;
 	if ( !Q_stricmp( command, "+use" ) ) return 2;
 	if ( !Q_stricmp( command, "+moveup" ) ) return 3;
+	if ( !Q_stricmp( command, "+scores" ) ) return 4;
+	if ( !Q_stricmp( command, "+movedown" ) ) return 7;
+	if ( !Q_stricmp( command, "saberAttackCycle" ) ) return 8;
 	if ( !Q_stricmp( command, "+button2" ) ) return 9;
 	if ( !Q_stricmp( command, "+useforce" ) ) return 10;
-	if ( !Q_stricmp( command, "+forward" ) || !Q_stricmp( command, "+lookup" ) ) return 11;
-	if ( !Q_stricmp( command, "+back" ) || !Q_stricmp( command, "+lookdown" ) || !Q_stricmp( command, "+movedown" ) ) return 12;
-	if ( !Q_stricmp( command, "+left" ) || !Q_stricmp( command, "+moveleft" ) || !Q_stricmp( command, "forceprev" ) ) return 13;
-	if ( !Q_stricmp( command, "+right" ) || !Q_stricmp( command, "+moveright" ) || !Q_stricmp( command, "forcenext" ) ) return 14;
-	if ( !Q_stricmp( command, "+speed" ) || !Q_stricmp( command, "+strafe" ) ) return 7;
-	if ( !Q_stricmp( command, "saberAttackCycle" ) || !Q_stricmp( command, "centerview" ) || !Q_stricmp( command, "+mlook" ) ) return 8;
-	if ( !Q_stricmp( command, "invnext" ) || !Q_stricmp( command, "weapnext" ) ) return 10;
-	if ( !Q_stricmp( command, "invprev" ) || !Q_stricmp( command, "weapprev" ) ) return 9;
-	if ( !Q_stricmpn( command, "weapon ", 7 ) ) return bindIndex % 16;
-	if ( !Q_stricmpn( command, "force_", 6 ) || !Q_stricmpn( command, "+force_", 7 ) ) return ( bindIndex % 12 ) + 4;
-	return bindIndex % 16;
+	if ( !Q_stricmp( command, "weapnext" ) ) return 11;
+	if ( !Q_stricmp( command, "weapprev" ) ) return 12;
+	if ( !Q_stricmp( command, "forceprev" ) ) return 13;
+	if ( !Q_stricmp( command, "forcenext" ) ) return 14;
+	return -1;
+}
+
+static const char *SplitScreenControllerButtonName( int button ) {
+	static const char *names[16] = {
+		"A", "B", "X", "Y", "BACK", "GUIDE", "START", "LEFT STICK",
+		"RIGHT STICK", "LEFT BUMPER", "RIGHT BUMPER", "DPAD UP", "DPAD DOWN",
+		"DPAD LEFT", "DPAD RIGHT", "BUTTON 16"
+	};
+
+	return button >= 0 && button < (int)ARRAY_LEN( names ) ? names[button] : "UNBOUND";
+}
+
+static qboolean SplitScreenControllerIndirectBindingFromName( const char *command ) {
+	if ( !Q_stricmpn( command, "weapon ", 7 ) ) {
+		Q_strncpyz( g_nameBind, "DPAD UP / DOWN", sizeof( g_nameBind ) );
+		return qtrue;
+	}
+	if ( !Q_stricmpn( command, "force_", 6 ) || !Q_stricmpn( command, "+force_", 7 ) ) {
+		Q_strncpyz( g_nameBind, "DPAD LEFT / RIGHT + RB", sizeof( g_nameBind ) );
+		return qtrue;
+	}
+	return qfalse;
 }
 
 static qboolean SplitScreenControllerBindingFromName( const char *command ) {
@@ -4953,13 +4973,53 @@ static qboolean SplitScreenControllerBindingFromName( const char *command ) {
 
 	trap->Cvar_VariableStringBuffer( "ui_splitScreenControlsPaintPlayer", paintPlayer, sizeof( paintPlayer ) );
 	player = atoi( paintPlayer );
-	if ( player < 2 || player > 4 ) {
+	if ( player < 1 || player > 4 ) {
 		return qfalse;
 	}
 
 	trap->Cvar_VariableStringBuffer( va( "ui_splitScreenP%iInput", player ), inputName, sizeof( inputName ) );
 	if ( Q_stricmpn( inputName, "controller", 10 ) ) {
 		return qfalse;
+	}
+	if ( !Q_stricmp( command, "+forward" ) ) {
+		Q_strncpyz( g_nameBind, "LEFT STICK UP", sizeof( g_nameBind ) );
+		return qtrue;
+	}
+	if ( !Q_stricmp( command, "+back" ) ) {
+		Q_strncpyz( g_nameBind, "LEFT STICK DOWN", sizeof( g_nameBind ) );
+		return qtrue;
+	}
+	if ( !Q_stricmp( command, "+moveleft" ) ) {
+		Q_strncpyz( g_nameBind, "LEFT STICK LEFT", sizeof( g_nameBind ) );
+		return qtrue;
+	}
+	if ( !Q_stricmp( command, "+moveright" ) ) {
+		Q_strncpyz( g_nameBind, "LEFT STICK RIGHT", sizeof( g_nameBind ) );
+		return qtrue;
+	}
+	if ( !Q_stricmp( command, "+left" ) ) {
+		Q_strncpyz( g_nameBind, "RIGHT STICK LEFT", sizeof( g_nameBind ) );
+		return qtrue;
+	}
+	if ( !Q_stricmp( command, "+right" ) ) {
+		Q_strncpyz( g_nameBind, "RIGHT STICK RIGHT", sizeof( g_nameBind ) );
+		return qtrue;
+	}
+	if ( !Q_stricmp( command, "+lookup" ) ) {
+		Q_strncpyz( g_nameBind, "RIGHT STICK UP", sizeof( g_nameBind ) );
+		return qtrue;
+	}
+	if ( !Q_stricmp( command, "+lookdown" ) ) {
+		Q_strncpyz( g_nameBind, "RIGHT STICK DOWN", sizeof( g_nameBind ) );
+		return qtrue;
+	}
+	if ( !Q_stricmp( command, "+speed" ) ) {
+		Q_strncpyz( g_nameBind, "ANALOG", sizeof( g_nameBind ) );
+		return qtrue;
+	}
+	if ( !Q_stricmp( command, "+strafe" ) ) {
+		Q_strncpyz( g_nameBind, "LEFT STICK", sizeof( g_nameBind ) );
+		return qtrue;
 	}
 
 	bindIndex = SplitScreenControllerBindIndexFromName( command );
@@ -4975,9 +5035,12 @@ static qboolean SplitScreenControllerBindingFromName( const char *command ) {
 	}
 
 	if ( button < 0 || button > 15 ) {
-		Q_strncpyz( g_nameBind, "???", sizeof( g_nameBind ) );
+		if ( SplitScreenControllerIndirectBindingFromName( command ) ) {
+			return qtrue;
+		}
+		Q_strncpyz( g_nameBind, "UNBOUND", sizeof( g_nameBind ) );
 	} else {
-		Com_sprintf( g_nameBind, sizeof( g_nameBind ), "JOY%i", button );
+		Q_strncpyz( g_nameBind, SplitScreenControllerButtonName( button ), sizeof( g_nameBind ) );
 	}
 
 	return qtrue;

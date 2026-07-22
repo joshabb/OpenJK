@@ -224,6 +224,11 @@ static qboolean Key_SetSplitScreenConsoleCvar( int player, const char *name, con
 			profileCvar = qfalse;
 		}
 	}
+	if ( !cvarName && ( !Q_stricmpn( name, "cg_", 3 ) || !Q_stricmpn( name, "r_autoMap", 9 ) ||
+		!Q_stricmp( name, "broadsword" ) || !Q_stricmp( name, "teamoverlay" ) ) ) {
+		cvarName = va( "cl_splitScreenP%i_%s", player, name );
+		profileCvar = qfalse;
+	}
 	if ( !cvarName ) {
 		return qfalse;
 	}
@@ -292,8 +297,13 @@ static int Key_TranslateSplitScreenMenuKey( int key )
 {
 	switch ( key ) {
 	case A_JOY0:	// A / Cross
-	case A_JOY7:	// Start
 		return A_ENTER;
+	case A_JOY7:	// Start
+		{
+			char mode[16];
+			Cvar_VariableStringBuffer( "ui_splitScreenMenuMode", mode, sizeof( mode ) );
+			return !Q_stricmp( mode, "setup" ) ? A_JOY7 : A_ENTER;
+		}
 	case A_JOY1:	// B / Circle
 	case A_JOY6:	// Back / Select
 		return A_ESCAPE;
@@ -1675,9 +1685,27 @@ void CL_InitKeyCommands( void ) {
 			char playerName[MAX_CVAR_VALUE_STRING];
 			Cvar_VariableStringBuffer( va( "ui_splitScreenP%iInput", player ), inputName, sizeof( inputName ) );
 			Cvar_VariableStringBuffer( player == 1 ? "name" : va( "ui_splitScreenP%iName", player ), playerName, sizeof( playerName ) );
-			Com_Printf( "SplitUIStatus: player=%i input=%s name=%s\n", player, inputName, playerName );
+			Com_Printf( "SplitUIStatus: player=%i input=%s name=%s catcher=%i\n",
+				player, inputName, playerName, Key_GetCatcherForPlayer( player ) );
 		}
 	}, "Print split-screen UI ownership state for QA" );
+	Cmd_AddCommand( "splitprofile_status", [](){
+		int player;
+		for ( player = 1; player <= MAX_SPLITSCREEN_PLAYERS; player++ ) {
+			char name[MAX_CVAR_VALUE_STRING];
+			char model[MAX_CVAR_VALUE_STRING];
+			char saber1[MAX_CVAR_VALUE_STRING];
+			char saber2[MAX_CVAR_VALUE_STRING];
+			char forcePowers[MAX_CVAR_VALUE_STRING];
+			Cvar_VariableStringBuffer( va( "ui_splitScreenP%iName", player ), name, sizeof( name ) );
+			Cvar_VariableStringBuffer( va( "ui_splitScreenP%iModel", player ), model, sizeof( model ) );
+			Cvar_VariableStringBuffer( va( "ui_splitScreenP%iSaber1", player ), saber1, sizeof( saber1 ) );
+			Cvar_VariableStringBuffer( va( "ui_splitScreenP%iSaber2", player ), saber2, sizeof( saber2 ) );
+			Cvar_VariableStringBuffer( va( "ui_splitScreenP%iForcePowers", player ), forcePowers, sizeof( forcePowers ) );
+			Com_Printf( "SplitProfile P%i: name=%s model=%s saber1=%s saber2=%s forcepowers=%s\n",
+				player, name, model, saber1, saber2, forcePowers );
+		}
+	}, "Print all split-screen player profiles" );
 	Cmd_AddCommand( "splitinput_key", [](){
 		int key;
 		qboolean down = qtrue;
@@ -1740,7 +1768,11 @@ void CL_InitKeyCommands( void ) {
 		}
 
 		Com_Printf( "SplitInputSim: key device=%s player=%i key=%i down=%i\n", device, player, key, down ? 1 : 0 );
-		Sys_QueEvent( 0, SE_KEY, key, down, 0, NULL );
+		if ( !Q_stricmpn( device, "controller", 10 ) ) {
+			CL_SplitScreenKeyEvent( player, key, down, 0 );
+		} else {
+			Sys_QueEvent( 0, SE_KEY, key, down, 0, NULL );
+		}
 	}, "Inject a device-scoped key event for split-screen UI/input QA" );
 	Cmd_AddCommand( "splitinput_mouse", [](){
 		int dx;
@@ -1832,7 +1864,10 @@ void CL_ParseBinding( int key, qboolean down, unsigned time )
 				char cmd[1024];
 				Com_sprintf( cmd, sizeof( cmd ), "%c%s %d %d\n",
 					( down ) ? '+' : '-', p + 1, key, time );
-				Cbuf_AddText( cmd );
+				// Button state must track the physical event immediately. Appending it
+				// behind a script containing wait can otherwise freeze gameplay input
+				// until the script has finished.
+				Cbuf_ExecuteText( EXEC_NOW, cmd );
 			}
 		}
 		else if( down )
@@ -1879,6 +1914,11 @@ Called by CL_KeyEvent to handle a keypress
 */
 void CL_KeyDownEvent( int key, unsigned time )
 {
+	if ( Cvar_VariableIntegerValue( "ui_splitScreenTraceInput" ) && key == A_MOUSE1 ) {
+		Com_Printf( "SplitInputTrace: primary mouse1 down catcher=%i cursor=%i binding=%s\n",
+			Key_GetCatcher(), cls.cursorActive ? 1 : 0,
+			kg.keys[keynames[key].upper].binding ? kg.keys[keynames[key].upper].binding : "<none>" );
+	}
 	if ( Cvar_VariableIntegerValue( "cl_splitScreen" ) && ( Key_GetCatcher() & KEYCATCH_UI ) ) {
 		if ( Cvar_VariableIntegerValue( "ui_splitScreenDeviceEventPending" ) ) {
 			Cvar_Set( "ui_splitScreenDeviceEventPending", "0" );
@@ -2002,6 +2042,10 @@ Called by CL_KeyEvent to handle a keyrelease
 */
 void CL_KeyUpEvent( int key, unsigned time )
 {
+	if ( Cvar_VariableIntegerValue( "ui_splitScreenTraceInput" ) && key == A_MOUSE1 ) {
+		Com_Printf( "SplitInputTrace: primary mouse1 up catcher=%i cursor=%i\n",
+			Key_GetCatcher(), cls.cursorActive ? 1 : 0 );
+	}
 	if ( Cvar_VariableIntegerValue( "cl_splitScreen" ) && ( Key_GetCatcher() & KEYCATCH_UI ) ) {
 		if ( Cvar_VariableIntegerValue( "ui_splitScreenDeviceEventPending" ) ) {
 			Cvar_Set( "ui_splitScreenDeviceEventPending", "0" );
@@ -2066,6 +2110,33 @@ void CL_KeyEvent (int key, qboolean down, unsigned time) {
 		CL_KeyUpEvent( key, time );
 }
 
+void CL_SplitScreenKeyEvent( int player, int key, qboolean down, unsigned time ) {
+	int catcher;
+
+	if ( player <= 1 || !Cvar_VariableIntegerValue( "cl_splitScreen" ) ) {
+		CL_KeyEvent( key, down, time );
+		return;
+	}
+
+	catcher = Key_GetCatcherForPlayer( player );
+	if ( ( catcher & KEYCATCH_CONSOLE ) && Key_GetConsolePlayer() == player ) {
+		CL_KeyEvent( key, down, time );
+		return;
+	}
+	if ( catcher & KEYCATCH_UI ) {
+		Cvar_Set( "ui_splitScreenInputTarget", va( "%i", player ) );
+		Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
+		CL_KeyEvent( key, down, time );
+		return;
+	}
+	if ( catcher & KEYCATCH_CGAME ) {
+		if ( key >= A_JOY0 && key <= A_JOY31 ) {
+			key = Key_TranslateSplitScreenMenuKey( key );
+		}
+		CL_CGameKeyEventForPlayer( player, key, down );
+	}
+}
+
 /*
 ===================
 CL_CharEvent
@@ -2103,6 +2174,7 @@ void Key_ClearStates( void ) {
 }
 
 static int keyCatchers = 0;
+static int cgameCatchers[MAX_SPLITSCREEN_PLAYERS + 1];
 
 /*
 ====================
@@ -2110,7 +2182,17 @@ Key_GetCatcher
 ====================
 */
 int Key_GetCatcher( void ) {
-	return keyCatchers;
+	return keyCatchers | cgameCatchers[1];
+}
+
+int Key_GetCatcherForPlayer( int player ) {
+	player = Key_ClampConsolePlayer( player );
+	return keyCatchers | cgameCatchers[player];
+}
+
+void Key_SetCGameCatcher( int player, int catcher ) {
+	player = Key_ClampConsolePlayer( player );
+	cgameCatchers[player] = catcher & KEYCATCH_CGAME;
 }
 
 /*
@@ -2119,6 +2201,7 @@ Key_SetCatcher
 ====================
 */
 void Key_SetCatcher( int catcher ) {
+	catcher &= ~KEYCATCH_CGAME;
 	// If the catcher state is changing, clear all key states
 	if ( catcher != keyCatchers )
 		Key_ClearStates();

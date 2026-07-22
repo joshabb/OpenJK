@@ -3410,6 +3410,7 @@ static int G_SplitScreenPlayerArg( int argIndex, int fallback ) {
 
 static int G_FindSplitScreenClient( int player ) {
 	int i;
+	char userinfo[MAX_INFO_STRING];
 
 	if ( player < 2 || player > 4 ) {
 		player = 2;
@@ -3426,6 +3427,12 @@ static int G_FindSplitScreenClient( int player ) {
 		gentity_t *ent = &g_entities[i];
 		if ( !ent->client || ent->client->pers.connected != CON_CONNECTED ) {
 			continue;
+		}
+		trap->GetUserinfo( i, userinfo, sizeof( userinfo ) );
+		if ( atoi( Info_ValueForKey( userinfo, "splitplayer" ) ) == player ) {
+			g_splitScreenLocalClient[i] = qtrue;
+			g_splitScreenClientNums[player] = i;
+			return i;
 		}
 		if ( !Q_stricmp( ent->client->pers.netname_nocolor, va( "SplitPlayer%i", player ) ) ) {
 			g_splitScreenLocalClient[i] = qtrue;
@@ -3827,7 +3834,7 @@ static void Cmd_SplitScreenPlace_f( gentity_t *ent ) {
 		VectorCopy( testOrigin, downOrigin );
 		downOrigin[2] -= 4096.0f;
 		trap->Trace( &trace, testOrigin, mins, maxs, downOrigin, ent->s.number, MASK_PLAYERSOLID, qfalse, 0, 0 );
-		if ( trace.fraction >= 1.0f ) {
+		if ( trace.fraction >= 1.0f || ( trace.entityNum >= 0 && trace.entityNum < level.maxclients ) ) {
 			continue;
 		}
 

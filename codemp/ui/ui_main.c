@@ -55,6 +55,17 @@ static float ui_viewportTransformY = 0.0f;
 static float ui_viewportTransformW = SCREEN_WIDTH;
 static float ui_viewportTransformH = SCREEN_HEIGHT;
 static qboolean ui_splitScreenPaintingProfiles = qfalse;
+static int ui_splitScreenTopCursor[5] = { -1, -1, -1, -1, -1 };
+
+typedef struct splitScreenControlsState_s {
+	qboolean initialized;
+	int cursorItem;
+	int itemFlags[MAX_MENUITEMS];
+	vec4_t itemForeColor[MAX_MENUITEMS];
+} splitScreenControlsState_t;
+
+static splitScreenControlsState_t ui_splitScreenControlsState[5];
+static int ui_splitScreenControlsStatePlayer;
 
 void UI_SetViewportTransform( qboolean active, float x, float y, float w, float h )
 {
@@ -4765,6 +4776,7 @@ static void UI_StartSkirmish(qboolean next) {
 }
 
 static void UI_ApplySplitScreenPlayerProfile( int player );
+static void UI_SplitScreenSendPlayerCommand( int player, const char *command );
 
 static void UI_Update(const char *name) {
 	int	val = trap->Cvar_VariableValue(name);
@@ -5811,6 +5823,12 @@ static void UI_LoadSplitScreenPlayerProfile( int player )
 
 	trap->Cvar_Set( "ui_splitScreenConfiguring", "1" );
 	trap->Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
+	if ( player > 1 ) {
+		const char *splitTeam = UI_Cvar_VariableString( va( "cl_splitScreenP%i_ui_myteam", player ) );
+		trap->Cvar_Set( "ui_myteam", splitTeam[0] ? splitTeam : va( "%i", TEAM_SPECTATOR ) );
+	} else if ( UI_Cvar_VariableString( "cl_splitScreenP1_ui_myteam" )[0] ) {
+		trap->Cvar_Set( "ui_myteam", UI_Cvar_VariableString( "cl_splitScreenP1_ui_myteam" ) );
+	}
 	Q_strncpyz( buf, UI_Cvar_VariableString( va( "ui_splitScreenP%iName", player ) ), sizeof( buf ) );
 	trap->Cvar_Set( "ui_Name", buf );
 	Com_sprintf( cvarName, sizeof( cvarName ), "ui_splitScreenP%iForcePowers", player );
@@ -6090,24 +6108,12 @@ UI_JoinServer
 */
 static void UI_QueueSplitScreenNetworkJoins( const char *serverAddress )
 {
-	int player;
-	int playerCount;
-
 	if ( !serverAddress || !serverAddress[0] || !trap->Cvar_VariableValue( "cl_splitScreen" ) ) {
 		return;
 	}
-
-	playerCount = (int)trap->Cvar_VariableValue( "ui_splitScreenPlayerCount" );
-	if ( playerCount < 2 ) {
-		playerCount = 2;
-	} else if ( playerCount > 4 ) {
-		playerCount = 4;
-	}
-
-	trap->Cmd_ExecuteText( EXEC_APPEND, "wait 80\n" );
-	for ( player = 2; player <= playerCount; player++ ) {
-		trap->Cmd_ExecuteText( EXEC_APPEND, va( "splitnet_connect %i %s\nwait 20\n", player, serverAddress ) );
-	}
+	trap->Cvar_Set( "cl_splitScreenPartyTarget", serverAddress );
+	trap->Cvar_Set( "ui_splitScreenPartyState", "connecting" );
+	trap->Cmd_ExecuteText( EXEC_APPEND, va( "splitnet_party_connect %s\n", serverAddress ) );
 }
 
 static void UI_JoinServer( void )
@@ -6660,9 +6666,7 @@ static void UI_RefreshSplitScreenInputMenu( void )
 
 static void UI_StartSplitScreenServer( void )
 {
-	char map[MAX_QPATH] = {0};
 	char sessionType[32] = {0};
-	int gameType = (int)trap->Cvar_VariableValue( "ui_splitScreenGameType" );
 	int playerCount = (int)trap->Cvar_VariableValue( "ui_splitScreenPlayerCount" );
 
 	if ( playerCount < 2 ) {
@@ -6671,10 +6675,6 @@ static void UI_StartSplitScreenServer( void )
 		playerCount = 4;
 	}
 
-	trap->Cvar_VariableStringBuffer( "ui_splitScreenMap", map, sizeof( map ) );
-	if ( !map[0] ) {
-		Q_strncpyz( map, "mp/ffa3", sizeof( map ) );
-	}
 	trap->Cvar_VariableStringBuffer( "ui_splitScreenSessionType", sessionType, sizeof( sessionType ) );
 
 	trap->Cvar_Set( "cl_splitScreen", "1" );
@@ -6689,6 +6689,8 @@ static void UI_StartSplitScreenServer( void )
 	UI_CopySplitScreenP1ProfileToGameCvars();
 
 	if ( !Q_stricmp( sessionType, "server" ) ) {
+		trap->Cvar_Set( "ui_splitScreenPartyState", "join_pending" );
+		trap->Cvar_Set( "ui_splitScreenHostPending", "0" );
 		trap->Cvar_Set( "cl_splitScreenLocalCmds", "0" );
 		trap->Key_SetCatcher( KEYCATCH_UI );
 		Menus_CloseAll();
@@ -6696,33 +6698,22 @@ static void UI_StartSplitScreenServer( void )
 		return;
 	}
 
-	trap->Cvar_Set( "cl_splitScreenLocalCmds", "1" );
+	trap->Cvar_Set( "ui_splitScreenPartyState", "host_pending" );
+	trap->Cvar_Set( "ui_splitScreenHostPending", "1" );
+	trap->Cvar_Set( "cl_splitScreenLocalCmds", "0" );
 	trap->Cvar_Set( "dedicated", "0" );
-	trap->Cvar_Set( "sv_maxClients", "8" );
-	trap->Cvar_Set( "g_gametype", va( "%i", gameType ) );
-
-	{
-		char joinCommands[MAX_STRING_CHARS] = {0};
-		int player;
-
-		Com_sprintf( joinCommands, sizeof( joinCommands ), "wait\nwait\ndevmap %s\nwait 300\n", map );
-		if ( gameType >= GT_TEAM ) {
-			Q_strcat( joinCommands, sizeof( joinCommands ), "cmd team red\nwait 20\n" );
-		}
-		for ( player = 2; player <= playerCount; player++ ) {
-			if ( gameType >= GT_TEAM ) {
-				Q_strcat( joinCommands, sizeof( joinCommands ), va( "cmd splitscreen_join %i %s\nwait 20\n", player, ( player & 1 ) ? "red" : "blue" ) );
-			} else {
-				Q_strcat( joinCommands, sizeof( joinCommands ), va( "cmd splitscreen_join %i\nwait 20\n", player ) );
-			}
-		}
-		Q_strcat( joinCommands, sizeof( joinCommands ), "splitscreen_menu\n" );
-		trap->Cmd_ExecuteText( EXEC_APPEND, joinCommands );
-	}
-	trap->Key_SetCatcher( trap->Key_GetCatcher() & ~KEYCATCH_UI );
-	trap->Key_ClearStates();
-	trap->Cvar_Set( "cl_paused", "0" );
 	Menus_CloseAll();
+	Menus_ActivateByName( "createserver" );
+}
+
+static void UI_QueueSplitScreenHostJoins( int gameType )
+{
+	(void)gameType;
+
+	trap->Cvar_Set( "cl_splitScreenPartyTarget", "localhost" );
+	trap->Cvar_Set( "ui_splitScreenPartyState", "connecting" );
+	trap->Cmd_ExecuteText( EXEC_APPEND, "splitnet_party_connect localhost\n" );
+	trap->Cvar_Set( "ui_splitScreenHostPending", "0" );
 }
 
 static void UI_AssignSplitScreenInput( int targetPlayer, const char *targetInputName )
@@ -6780,9 +6771,13 @@ static void UI_RunMenuScript(char **args)
 		if (Q_stricmp(name, "StartServer") == 0)
 		{
 			int i, added = 0;
+			int configuredBots = 0;
 			float skill;
 			int warmupTime = 0;
 			int doWarmup = 0;
+			qboolean splitHostPending = trap->Cvar_VariableValue( "ui_splitScreenHostPending" ) != 0;
+			int splitPlayerCount = Com_Clamp( 2, 4,
+				(int)trap->Cvar_VariableValue( "ui_splitScreenPlayerCount" ) );
 
 			//	trap->Cvar_Set("cg_thirdPerson", "0");
 			trap->Cvar_Set("cg_cameraOrbit", "0");
@@ -6791,7 +6786,31 @@ static void UI_RunMenuScript(char **args)
 			//	trap->Cvar_Set("ui_singlePlayerActive", "0");
 
 			// if a solo game is started, automatically turn dedicated off here (don't want to do it in the menu, might get annoying)
-			if( trap->Cvar_VariableValue( "ui_singlePlayerActive" ) )
+			if ( splitHostPending )
+			{
+				int requiredClients;
+				int remoteSlots = Com_Clamp( 1, MAX_CLIENTS - splitPlayerCount,
+					(int)trap->Cvar_VariableValue( "ui_splitScreenRemoteSlots" ) );
+				for ( i = 0; i < PLAYERS_PER_TEAM; i++ )
+				{
+					if ( trap->Cvar_VariableValue( va( "ui_blueteam%i", i + 1 ) ) > 1 ) configuredBots++;
+					if ( trap->Cvar_VariableValue( va( "ui_redteam%i", i + 1 ) ) > 1 ) configuredBots++;
+				}
+				requiredClients = Com_Clamp( splitPlayerCount, MAX_CLIENTS,
+					splitPlayerCount + configuredBots + remoteSlots );
+				trap->Cvar_Set( "dedicated", "0" );
+				trap->Cvar_Set( "cl_splitScreen", "1" );
+				trap->Cvar_Set( "cl_splitScreenLocalCmds", "0" );
+				UI_CopySplitScreenP1ProfileToGameCvars();
+				if ( trap->Cvar_VariableValue( "sv_maxClients" ) < requiredClients )
+				{
+					trap->Cvar_Set( "sv_maxClients", va( "%i", requiredClients ) );
+				}
+				trap->Cvar_Set( "ui_splitScreenRemoteSlots", va( "%i", remoteSlots ) );
+				trap->Cvar_Set( "ui_splitScreenRequiredClients", va( "%i", requiredClients ) );
+				trap->Cvar_Set( "ui_splitScreenPartyState", "connecting" );
+			}
+			else if( trap->Cvar_VariableValue( "ui_singlePlayerActive" ) )
 			{
 				trap->Cvar_Set( "dedicated", "0" );
 			}
@@ -6875,6 +6894,10 @@ static void UI_RunMenuScript(char **args)
 					trap->Cvar_Set("sv_maxClients", va("%i", added+1));
 					break;
 				}
+			}
+			if ( splitHostPending )
+			{
+				UI_QueueSplitScreenHostJoins( uiInfo.gameTypes[ui_netGametype.integer].gtEnum );
 			}
 			} else if (Q_stricmp(name, "SplitScreenAssignInput") == 0) {
 				int player;
@@ -10990,13 +11013,16 @@ static qboolean UI_SplitScreenPlayerSetupVisible( void )
 	if ( !trap->Cvar_VariableValue( "cl_splitScreen" ) ) {
 		return qfalse;
 	}
+	trap->Cvar_VariableStringBuffer( "ui_splitScreenMenuMode", mode, sizeof( mode ) );
+	if ( mode[0] ) {
+		return !Q_stricmp( mode, "setup" );
+	}
 	if ( UI_MenuIsVisible( "ingame_player" ) || UI_MenuIsVisible( "ingame_playerforce" ) || UI_MenuIsVisible( "ingame_saber" ) ) {
 		return qtrue;
 	}
 	if ( UI_MenuIsVisible( "splitscreen" ) ) {
 		return qfalse;
 	}
-	trap->Cvar_VariableStringBuffer( "ui_splitScreenMenuMode", mode, sizeof( mode ) );
 	return UI_MenuIsVisible( "splitscreen_players" ) || !Q_stricmp( mode, "setup" );
 }
 
@@ -11007,13 +11033,16 @@ static qboolean UI_SplitScreenIngameVisible( void )
 	if ( !( trap->Key_GetCatcher() & KEYCATCH_UI ) ) {
 		return qfalse;
 	}
+	trap->Cvar_VariableStringBuffer( "ui_splitScreenMenuMode", mode, sizeof( mode ) );
+	if ( mode[0] ) {
+		return !Q_stricmp( mode, "top" );
+	}
 	if ( UI_MenuIsVisible( "splitscreen" ) ) {
 		return qtrue;
 	}
 	if ( UI_MenuIsVisible( "splitscreen_players" ) ) {
 		return qfalse;
 	}
-	trap->Cvar_VariableStringBuffer( "ui_splitScreenMenuMode", mode, sizeof( mode ) );
 	return UI_MenuIsVisible( "splitscreen" ) || !Q_stricmp( mode, "top" );
 }
 
@@ -11072,10 +11101,10 @@ static const splitScreenKeyboardCvar_t ui_splitKeyboardCvars[] = {
 	{ "Move Forward Axis", "cl_splitScreenP%iMoveForwardAxis" },
 	{ "Look Yaw Axis", "cl_splitScreenP%iLookYawAxis" },
 	{ "Look Pitch Axis", "cl_splitScreenP%iLookPitchAxis" },
-	{ "Attack Button", "cl_splitScreenP%iAttackButton" },
-	{ "Alt Attack Button", "cl_splitScreenP%iAltAttackButton" },
-	{ "Use Button", "cl_splitScreenP%iUseButton" },
-	{ "Jump Button", "cl_splitScreenP%iJumpButton" }
+	{ "Attack Button", "cl_splitScreenP%iBind10" },
+	{ "Alt Attack Button", "cl_splitScreenP%iBind11" },
+	{ "Use Button", "cl_splitScreenP%iBind13" },
+	{ "Jump Button", "cl_splitScreenP%iBind08" }
 };
 
 typedef struct splitScreenKeyboardCheat_s {
@@ -11317,13 +11346,25 @@ static qboolean UI_HandleSplitScreenKeyboardKey( int key, qboolean down )
 		return qtrue;
 	case A_CURSOR_UP:
 	case A_KP_8:
-		if ( ui_splitKeyboard.cursor >= cols ) {
+		if ( !ui_splitKeyboard.cvarMode && !ui_splitKeyboard.cheatMode && ui_splitKeyboard.cursor >= UI_SplitScreenKeyboardKeyCount() - 5 ) {
+			int specialCol = ui_splitKeyboard.cursor - ( UI_SplitScreenKeyboardKeyCount() - 5 );
+			ui_splitKeyboard.cursor = 40 + ( specialCol > 2 ? 2 : specialCol );
+		} else if ( ui_splitKeyboard.cursor >= cols ) {
 			ui_splitKeyboard.cursor -= cols;
 		}
 		return qtrue;
 	case A_CURSOR_DOWN:
 	case A_KP_2:
-		if ( ui_splitKeyboard.cursor + cols < keyCount ) {
+		if ( !ui_splitKeyboard.cvarMode && !ui_splitKeyboard.cheatMode ) {
+			if ( ui_splitKeyboard.cursor >= 40 && ui_splitKeyboard.cursor < 43 ) {
+				ui_splitKeyboard.cursor = ( UI_SplitScreenKeyboardKeyCount() - 5 ) + ( ui_splitKeyboard.cursor - 40 );
+			} else if ( ui_splitKeyboard.cursor >= 30 && ui_splitKeyboard.cursor < 40 ) {
+				int col = ui_splitKeyboard.cursor % cols;
+				ui_splitKeyboard.cursor = col <= 2 ? 40 + col : ( UI_SplitScreenKeyboardKeyCount() - 5 ) + ( col > 4 ? 4 : col );
+			} else if ( ui_splitKeyboard.cursor + cols < 43 ) {
+				ui_splitKeyboard.cursor += cols;
+			}
+		} else if ( ui_splitKeyboard.cursor + cols < keyCount ) {
 			ui_splitKeyboard.cursor += cols;
 		}
 		return qtrue;
@@ -11397,6 +11438,7 @@ static void UI_PaintSplitScreenKeyboard( void )
 {
 	const int cols = ( ui_splitKeyboard.cvarMode || ui_splitKeyboard.cheatMode ) ? 3 : UI_SplitScreenKeyboardCols();
 	const int keyCount = ui_splitKeyboard.cvarMode ? (int)ARRAY_LEN( ui_splitKeyboardCvars ) : ( ui_splitKeyboard.cheatMode ? (int)ARRAY_LEN( ui_splitKeyboardCheats ) : UI_SplitScreenKeyboardKeyCount() );
+	const int rowCount = ( ui_splitKeyboard.cvarMode || ui_splitKeyboard.cheatMode ) ? ( keyCount + cols - 1 ) / cols : 6;
 	float viewportX;
 	float viewportY;
 	float viewportW;
@@ -11426,9 +11468,9 @@ static void UI_PaintSplitScreenKeyboard( void )
 	panelX = 46.0f;
 	panelY = 76.0f;
 	panelW = SCREEN_WIDTH - 92.0f;
-	panelH = 318.0f;
+	panelH = 366.0f;
 	keyW = ( panelW - 32.0f - ( gap * ( cols - 1 ) ) ) / cols;
-	keyH = 35.0f;
+	keyH = ( panelH - 136.0f - gap * ( rowCount - 1 ) ) / rowCount;
 
 	UI_FillRect( panelX, panelY, panelW, panelH, panel );
 	_UI_DrawRect( panelX, panelY, panelW, panelH, 1.0f, border );
@@ -11469,7 +11511,7 @@ static void UI_PaintSplitScreenKeyboard( void )
 			float labelWidth = Text_Width( label, labelScale, FONT_MEDIUM );
 			float labelX = x + ( w - labelWidth ) * 0.5f;
 			float labelHeight = Text_Height( label, labelScale, FONT_MEDIUM );
-			float labelY = y + ( keyH - labelHeight ) * 0.5f;
+			float labelY = y + ( keyH - labelHeight ) * 0.5f + labelHeight - 2.0f;
 			if ( labelX < x + 4.0f ) {
 				labelX = x + 4.0f;
 			}
@@ -11601,6 +11643,13 @@ static int UI_SplitScreenInputTargetPlayer( void )
 	int playerCount = UI_SplitScreenSetupPlayerCount();
 	char lastDevice[32] = {0};
 
+	// An input event or an explicitly opened menu owns the UI until that owner is
+	// cleared.  The last-device cvar is only a fallback; it can legitimately be
+	// stale after console commands and scripted menu transitions.
+	if ( player >= 1 && player <= playerCount ) {
+		return player;
+	}
+
 	trap->Cvar_VariableStringBuffer( "ui_splitScreenLastInputDevice", lastDevice, sizeof( lastDevice ) );
 	if ( !Q_stricmp( lastDevice, "keyboard" ) || !Q_stricmp( lastDevice, "mouse" ) ) {
 		player = UI_SplitScreenPlayerForInputDevice( "keyboard" );
@@ -11613,11 +11662,6 @@ static int UI_SplitScreenInputTargetPlayer( void )
 		if ( player >= 1 && player <= playerCount ) {
 			return player;
 		}
-	}
-
-	player = (int)trap->Cvar_VariableValue( "ui_splitScreenInputTarget" );
-	if ( player >= 1 && player <= playerCount ) {
-		return player;
 	}
 
 	return UI_SplitScreenSetupPlayerForPoint( uiInfo.uiDC.cursorx, uiInfo.uiDC.cursory );
@@ -11732,6 +11776,46 @@ static void UI_ResetSplitScreenStockControlsMenu( void )
 	UI_SetSplitScreenMenuItemForeColor( menu, "othercontrolbutton", normal );
 }
 
+static void UI_SaveSplitScreenControlsState( menuDef_t *menu, int player )
+{
+	int i;
+
+	if ( !menu || player < 1 || player > 4 ) {
+		return;
+	}
+
+	ui_splitScreenControlsState[player].initialized = qtrue;
+	ui_splitScreenControlsState[player].cursorItem = menu->cursorItem;
+	for ( i = 0; i < menu->itemCount && i < MAX_MENUITEMS; i++ ) {
+		if ( menu->items[i] ) {
+			ui_splitScreenControlsState[player].itemFlags[i] = menu->items[i]->window.flags;
+			memcpy( ui_splitScreenControlsState[player].itemForeColor[i], menu->items[i]->window.foreColor, sizeof( vec4_t ) );
+		}
+	}
+}
+
+static void UI_LoadSplitScreenControlsState( menuDef_t *menu, int player )
+{
+	int i;
+
+	if ( !menu || player < 1 || player > 4 ) {
+		return;
+	}
+
+	if ( !ui_splitScreenControlsState[player].initialized ) {
+		UI_ResetSplitScreenStockControlsMenu();
+		UI_SaveSplitScreenControlsState( menu, player );
+	}
+
+	menu->cursorItem = ui_splitScreenControlsState[player].cursorItem;
+	for ( i = 0; i < menu->itemCount && i < MAX_MENUITEMS; i++ ) {
+		if ( menu->items[i] ) {
+			menu->items[i]->window.flags = ui_splitScreenControlsState[player].itemFlags[i];
+			memcpy( menu->items[i]->window.foreColor, ui_splitScreenControlsState[player].itemForeColor[i], sizeof( vec4_t ) );
+		}
+	}
+}
+
 static void UI_OpenSplitScreenModeForPlayer( const char *mode, int player )
 {
 	if ( player < 1 ) {
@@ -11749,8 +11833,15 @@ static void UI_OpenSplitScreenModeForPlayer( const char *mode, int player )
 	trap->Cvar_Set( "ui_splitScreenMenuMode", mode );
 	if ( !Q_stricmp( mode, "controls" ) ) {
 		Menus_ActivateByName( "ingame_controls" );
-		UI_ResetSplitScreenStockControlsMenu();
-		trap->Cvar_Set( "ui_splitScreenControlsMenuReset", "1" );
+		trap->Cvar_Set( "ui_splitScreenControlsMenuReset", "0" );
+		trap->Cvar_Set( "ui_splitScreenControlsAwaitingGamepad", "0" );
+	} else if ( !Q_stricmp( mode, "stock" ) ) {
+		char menuName[64];
+		trap->Cvar_VariableStringBuffer( "ui_splitScreenStockMenu", menuName, sizeof( menuName ) );
+		if ( menuName[0] ) {
+			Menus_ActivateByName( menuName );
+		}
+		trap->Cvar_Set( "ui_splitScreenControlsMenuReset", "0" );
 		trap->Cvar_Set( "ui_splitScreenControlsAwaitingGamepad", "0" );
 	} else {
 		trap->Cvar_Set( "ui_splitScreenControlsMenuReset", "0" );
@@ -11790,6 +11881,58 @@ static itemDef_t *UI_SplitScreenFocusedItem( menuDef_t *menu )
 	}
 
 	return NULL;
+}
+
+static int UI_SplitScreenTopDefaultCursor( menuDef_t *menu )
+{
+	itemDef_t *about;
+	int i;
+
+	if ( !menu ) {
+		return -1;
+	}
+	about = Menu_FindItemByName( menu, "about" );
+	for ( i = 0; about && i < menu->itemCount; i++ ) {
+		if ( menu->items[i] == about ) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+static void UI_LoadSplitScreenTopCursor( menuDef_t *menu, int player )
+{
+	int cursor;
+	int i;
+
+	if ( !menu || player < 1 || player > 4 ) {
+		return;
+	}
+	cursor = ui_splitScreenTopCursor[player];
+	if ( cursor < 0 || cursor >= menu->itemCount ) {
+		cursor = UI_SplitScreenTopDefaultCursor( menu );
+		ui_splitScreenTopCursor[player] = cursor;
+	}
+	menu->cursorItem = cursor;
+	for ( i = 0; i < menu->itemCount; i++ ) {
+		if ( menu->items[i] ) {
+			menu->items[i]->window.flags &= ~WINDOW_HASFOCUS;
+		}
+	}
+	if ( cursor >= 0 && cursor < menu->itemCount && menu->items[cursor] ) {
+		menu->items[cursor]->window.flags |= WINDOW_HASFOCUS;
+	}
+}
+
+static void UI_SaveSplitScreenTopCursor( menuDef_t *menu, int player )
+{
+	if ( menu && player >= 1 && player <= 4 ) {
+		itemDef_t *focused;
+		ui_splitScreenTopCursor[player] = menu->cursorItem;
+		focused = UI_SplitScreenFocusedItem( menu );
+		trap->Cvar_Set( va( "ui_splitScreenP%iTopFocusedItem", player ),
+			focused && focused->window.name ? focused->window.name : "" );
+	}
 }
 
 static void UI_HideSplitScreenIngameSubmenus( void )
@@ -11857,6 +12000,7 @@ static void UI_PaintSplitScreenPlayerSetup( void )
 	}
 
 	playerCount = UI_SplitScreenSetupPlayerCount();
+	trap->Cvar_Set( "cl_splitScreenP1_ui_myteam", UI_Cvar_VariableString( "ui_myteam" ) );
 	activeTarget = (int)trap->Cvar_VariableValue( "ui_splitScreenProfileTarget" );
 	if ( activeTarget < 1 || activeTarget > playerCount ) {
 		activeTarget = UI_SplitScreenInputTargetPlayer();
@@ -11897,6 +12041,8 @@ static void UI_PaintSplitScreenPlayerSetup( void )
 	UI_PaintSplitScreenKeyboard();
 }
 
+static void UI_PrepareSplitScreenIngameTopMenu( menuDef_t *menu );
+
 static void UI_PaintSplitScreenIngameMenus( void )
 {
 	menuDef_t *ingameMenu = Menus_FindByName( "ingame" );
@@ -11908,34 +12054,17 @@ static void UI_PaintSplitScreenIngameMenus( void )
 	if ( !ingameMenu ) {
 		return;
 	}
+	playerCount = UI_SplitScreenSetupPlayerCount();
+	activeTarget = UI_SplitScreenInputTargetPlayer();
 	if ( trap->Cvar_VariableValue( "ui_splitScreenTopReset" ) ) {
-		itemDef_t *firstItem;
-		int i;
-		ingameMenu->cursorItem = -1;
-		for ( i = 0; i < ingameMenu->itemCount; ++i ) {
-			if ( ingameMenu->items[i] ) {
-				ingameMenu->items[i]->window.flags &= ~WINDOW_HASFOCUS;
-			}
-		}
-		firstItem = Menu_FindItemByName( ingameMenu, "about" );
-		if ( firstItem ) {
-			for ( i = 0; i < ingameMenu->itemCount; ++i ) {
-				if ( ingameMenu->items[i] == firstItem ) {
-					ingameMenu->cursorItem = i;
-					firstItem->window.flags |= WINDOW_HASFOCUS;
-					trap->Cvar_Set( "ui_splitScreenFocusedItem", "about" );
-					break;
-				}
-			}
-		}
+		ui_splitScreenTopCursor[activeTarget] = UI_SplitScreenTopDefaultCursor( ingameMenu );
+		trap->Cvar_Set( "ui_splitScreenFocusedItem", "about" );
 		trap->Cvar_Set( "ui_splitScreenTopReset", "0" );
 	}
 
-	playerCount = UI_SplitScreenSetupPlayerCount();
-	activeTarget = UI_SplitScreenInputTargetPlayer();
-
 	UI_HideSplitScreenIngameSubmenus();
-	ingameMenu->window.flags |= WINDOW_FORCED;
+	UI_PrepareSplitScreenIngameTopMenu( ingameMenu );
+	ingameMenu->window.flags |= ( WINDOW_FORCED | WINDOW_VISIBLE );
 
 	for ( player = 1; player <= playerCount; player++ ) {
 		float viewportX;
@@ -11945,9 +12074,16 @@ static void UI_PaintSplitScreenIngameMenus( void )
 
 		UI_SplitScreenSetupMenuViewport( player, playerCount, &viewportX, &viewportY, &viewportW, &viewportH );
 		UI_SetViewportTransform( qtrue, viewportX, viewportY, viewportW, viewportH );
+		UI_LoadSplitScreenTopCursor( ingameMenu, player );
+		{
+			itemDef_t *focused = UI_SplitScreenFocusedItem( ingameMenu );
+			trap->Cvar_Set( va( "ui_splitScreenP%iTopFocusedItem", player ),
+				focused && focused->window.name ? focused->window.name : "" );
+		}
 		Menu_Paint( ingameMenu, qtrue );
 		UI_SetViewportTransform( qfalse, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT );
 	}
+	UI_LoadSplitScreenTopCursor( ingameMenu, activeTarget );
 
 	trap->Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", activeTarget ) );
 
@@ -12018,8 +12154,6 @@ static void UI_PaintSplitScreenStockMenu( const char *menuName )
 	playerCount = UI_SplitScreenSetupPlayerCount();
 	activeTarget = UI_SplitScreenInputTargetPlayer();
 
-	UI_SetViewportTransform( qfalse, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT );
-	UI_FillRect( 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, black );
 	if ( ingameMenu ) {
 		UI_PrepareSplitScreenIngameTopMenu( ingameMenu );
 		ingameMenu->window.flags |= ( WINDOW_FORCED | WINDOW_VISIBLE );
@@ -12042,15 +12176,22 @@ static void UI_PaintSplitScreenStockMenu( const char *menuName )
 		UI_LoadSplitScreenPlayerProfile( player );
 		UI_SplitScreenSetupMenuViewport( player, playerCount, &viewportX, &viewportY, &viewportW, &viewportH );
 		UI_SetViewportTransform( qtrue, viewportX, viewportY, viewportW, viewportH );
+		if ( player == activeTarget ) {
+			UI_FillRect( 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, black );
+		}
 		if ( ingameMenu ) {
+			UI_LoadSplitScreenTopCursor( ingameMenu, player );
 			Menu_Paint( ingameMenu, qtrue );
 		}
-		Menu_Paint( menu, qtrue );
+		if ( player == activeTarget ) {
+			Menu_Paint( menu, qtrue );
+		}
 		UI_SetViewportTransform( qfalse, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT );
 	}
 
 	trap->Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", activeTarget ) );
 	UI_LoadSplitScreenPlayerProfile( activeTarget );
+	UI_LoadSplitScreenTopCursor( ingameMenu, activeTarget );
 
 	UI_FillRect( 0, SCREEN_HEIGHT / 2.0f - 1.0f, SCREEN_WIDTH, 2, divider );
 	if ( playerCount > 2 ) {
@@ -12066,6 +12207,16 @@ static void UI_PaintSplitScreenJoinMenu( void )
 static void UI_PaintSplitScreenExitMenu( void )
 {
 	UI_PaintSplitScreenStockMenu( "ingame_leave" );
+}
+
+static void UI_PaintSplitScreenScopedStockMenu( void )
+{
+	char menuName[64];
+
+	trap->Cvar_VariableStringBuffer( "ui_splitScreenStockMenu", menuName, sizeof( menuName ) );
+	if ( menuName[0] ) {
+		UI_PaintSplitScreenStockMenu( menuName );
+	}
 }
 
 static const char *ui_splitScreenControllerBindCommands[] = {
@@ -12143,39 +12294,178 @@ static void UI_PaintSplitScreenControlsMenu( void )
 	menuDef_t *menu = Menus_FindByName( "ingame_controls" );
 	vec4_t black = { 0.0f, 0.0f, 0.0f, .86f };
 	vec4_t divider = { .298f, .305f, .690f, 1.0f };
-	int player;
+	int player = UI_SplitScreenInputTargetPlayer();
 	int playerCount = UI_SplitScreenSetupPlayerCount();
+	float screenX;
+	float screenY;
+	float screenW;
+	float screenH;
+	float viewportX;
+	float viewportY;
+	float viewportW;
+	float viewportH;
 
 	if ( !menu ) {
 		return;
 	}
 
 	UI_SetViewportTransform( qfalse, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT );
-	UI_FillRect( 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, black );
+	UI_SplitScreenSetupViewport( player, playerCount, &screenX, &screenY, &screenW, &screenH );
+	UI_FillRect( screenX, screenY, screenW, screenH, black );
 	menu->window.flags |= ( WINDOW_FORCED | WINDOW_VISIBLE );
-	if ( !trap->Cvar_VariableValue( "ui_splitScreenControlsMenuReset" ) ) {
-		UI_ResetSplitScreenStockControlsMenu();
+	if ( ui_splitScreenControlsStatePlayer != player || !trap->Cvar_VariableValue( "ui_splitScreenControlsMenuReset" ) ) {
+		if ( ui_splitScreenControlsStatePlayer >= 1 && ui_splitScreenControlsStatePlayer <= 4 ) {
+			UI_SaveSplitScreenControlsState( menu, ui_splitScreenControlsStatePlayer );
+		}
+		UI_LoadSplitScreenControlsState( menu, player );
+		ui_splitScreenControlsStatePlayer = player;
 		trap->Cvar_Set( "ui_splitScreenControlsMenuReset", "1" );
 	}
 
-	for ( player = 1; player <= playerCount; player++ ) {
-		float viewportX;
-		float viewportY;
-		float viewportW;
-		float viewportH;
-
-		UI_SplitScreenSetupMenuViewport( player, playerCount, &viewportX, &viewportY, &viewportW, &viewportH );
-		UI_SetViewportTransform( qtrue, viewportX, viewportY, viewportW, viewportH );
-		trap->Cvar_Set( "ui_splitScreenControlsPaintPlayer", va( "%i", player ) );
-		Menu_Paint( menu, qtrue );
-		UI_SetViewportTransform( qfalse, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT );
-	}
+	UI_SplitScreenSetupMenuViewport( player, playerCount, &viewportX, &viewportY, &viewportW, &viewportH );
+	UI_SetViewportTransform( qtrue, viewportX, viewportY, viewportW, viewportH );
+	trap->Cvar_Set( "ui_splitScreenControlsPaintPlayer", va( "%i", player ) );
+	Menu_Paint( menu, qtrue );
+	UI_SetViewportTransform( qfalse, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT );
 	trap->Cvar_Set( "ui_splitScreenControlsPaintPlayer", "0" );
 
 	UI_FillRect( 0, SCREEN_HEIGHT / 2.0f - 1.0f, SCREEN_WIDTH, 2, divider );
 	if ( playerCount > 2 ) {
 		UI_FillRect( SCREEN_WIDTH / 2.0f - 1.0f, playerCount == 3 ? SCREEN_HEIGHT / 2.0f : 0, 2, playerCount == 3 ? SCREEN_HEIGHT / 2.0f : SCREEN_HEIGHT, divider );
 	}
+}
+
+static qboolean UI_MoveSplitScreenControlsFocus( menuDef_t *menu, int key, qboolean wrap )
+{
+	itemDef_t *current = UI_SplitScreenFocusedItem( menu );
+	itemDef_t *best = NULL;
+	float currentX;
+	float currentY;
+	float bestScore = 999999.0f;
+	int bestIndex = -1;
+	int i;
+
+	if ( !menu || !current || ( key != A_CURSOR_LEFT && key != A_CURSOR_RIGHT && key != A_CURSOR_UP && key != A_CURSOR_DOWN ) ) {
+		return qfalse;
+	}
+
+	currentX = current->window.rect.x + current->window.rect.w * 0.5f;
+	currentY = current->window.rect.y + current->window.rect.h * 0.5f;
+	for ( i = 0; i < menu->itemCount; i++ ) {
+		itemDef_t *candidate = menu->items[i];
+		float candidateX;
+		float candidateY;
+		float dx;
+		float dy;
+		float primary;
+		float secondary;
+		float score;
+
+		if ( !candidate || candidate == current || candidate->disabled ||
+			!( candidate->window.flags & WINDOW_VISIBLE ) || ( candidate->window.flags & WINDOW_DECORATION ) ||
+			( ( candidate->cvarFlags & ( CVAR_ENABLE | CVAR_DISABLE ) ) &&
+			  !Item_EnableShowViaCvar( candidate, CVAR_ENABLE ) ) ||
+			( ( candidate->cvarFlags & ( CVAR_SHOW | CVAR_HIDE ) ) &&
+			  !Item_EnableShowViaCvar( candidate, CVAR_SHOW ) ) ) {
+			continue;
+		}
+		candidateX = candidate->window.rect.x + candidate->window.rect.w * 0.5f;
+		candidateY = candidate->window.rect.y + candidate->window.rect.h * 0.5f;
+		dx = candidateX - currentX;
+		dy = candidateY - currentY;
+		if ( key == A_CURSOR_RIGHT ) {
+			if ( dx <= 1.0f ) continue;
+			primary = dx;
+			secondary = dy < 0.0f ? -dy : dy;
+		} else if ( key == A_CURSOR_LEFT ) {
+			if ( dx >= -1.0f ) continue;
+			primary = -dx;
+			secondary = dy < 0.0f ? -dy : dy;
+		} else if ( key == A_CURSOR_DOWN ) {
+			if ( dy <= 1.0f ) continue;
+			primary = dy;
+			secondary = dx < 0.0f ? -dx : dx;
+		} else {
+			if ( dy >= -1.0f ) continue;
+			primary = -dy;
+			secondary = dx < 0.0f ? -dx : dx;
+		}
+		score = primary + secondary * 4.0f;
+		if ( score < bestScore ) {
+			bestScore = score;
+			best = candidate;
+			bestIndex = i;
+		}
+	}
+	if ( !best && wrap ) {
+		for ( i = 0; i < menu->itemCount; i++ ) {
+			itemDef_t *candidate = menu->items[i];
+			float candidateX;
+			float candidateY;
+			float secondary;
+			float score;
+
+			if ( !candidate || candidate == current || candidate->disabled ||
+				!( candidate->window.flags & WINDOW_VISIBLE ) || ( candidate->window.flags & WINDOW_DECORATION ) ||
+				( ( candidate->cvarFlags & ( CVAR_ENABLE | CVAR_DISABLE ) ) &&
+				  !Item_EnableShowViaCvar( candidate, CVAR_ENABLE ) ) ||
+				( ( candidate->cvarFlags & ( CVAR_SHOW | CVAR_HIDE ) ) &&
+				  !Item_EnableShowViaCvar( candidate, CVAR_SHOW ) ) ) {
+				continue;
+			}
+			candidateX = candidate->window.rect.x + candidate->window.rect.w * 0.5f;
+			candidateY = candidate->window.rect.y + candidate->window.rect.h * 0.5f;
+			if ( key == A_CURSOR_RIGHT || key == A_CURSOR_LEFT ) {
+				secondary = candidateY - currentY;
+				if ( secondary < 0.0f ) secondary = -secondary;
+				score = ( key == A_CURSOR_RIGHT ? candidateX : SCREEN_WIDTH - candidateX ) + secondary * 4.0f;
+			} else {
+				secondary = candidateX - currentX;
+				if ( secondary < 0.0f ) secondary = -secondary;
+				score = ( key == A_CURSOR_DOWN ? candidateY : SCREEN_HEIGHT - candidateY ) + secondary * 4.0f;
+			}
+			if ( score < bestScore ) {
+				bestScore = score;
+				best = candidate;
+				bestIndex = i;
+			}
+		}
+	}
+
+	if ( !best || !Item_SetFocus( best, best->window.rect.x + 1.0f, best->window.rect.y + 1.0f ) ) {
+		return qfalse;
+	}
+	menu->cursorItem = bestIndex;
+	Menu_HandleMouseMove( menu, best->window.rect.x + 1.0f, best->window.rect.y + 1.0f );
+	return qtrue;
+}
+
+static qboolean UI_FocusSplitScreenPlayerAction( menuDef_t *menu, qboolean spectator )
+{
+	const char *names[2];
+	int nameIndex;
+	int itemIndex;
+
+	names[0] = spectator ? "applyjoin" : "applycurrent";
+	names[1] = spectator ? "applycurrent" : "applyjoin";
+	for ( nameIndex = 0; nameIndex < 2; nameIndex++ ) {
+		itemDef_t *item = Menu_FindItemByName( menu, names[nameIndex] );
+
+		if ( !item || !( item->window.flags & WINDOW_VISIBLE ) || item->disabled ||
+			!Item_SetFocus( item, item->window.rect.x + 1.0f, item->window.rect.y + 1.0f ) ) {
+			continue;
+		}
+		for ( itemIndex = 0; itemIndex < menu->itemCount; itemIndex++ ) {
+			if ( menu->items[itemIndex] == item ) {
+				menu->cursorItem = itemIndex;
+				break;
+			}
+		}
+		Menu_HandleMouseMove( menu, item->window.rect.x + 1.0f, item->window.rect.y + 1.0f );
+		return qtrue;
+	}
+
+	return qfalse;
 }
 
 static qboolean UI_HandleSplitScreenPlayerSetupKey( int key, qboolean down )
@@ -12187,6 +12477,8 @@ static qboolean UI_HandleSplitScreenPlayerSetupKey( int key, qboolean down )
 	int oldX;
 	int oldY;
 	qboolean controllerNavigation;
+	qboolean controllerInput;
+	int rawKey = key;
 	char inputName[32] = {0};
 
 	if ( !UI_SplitScreenPlayerSetupVisible() ) {
@@ -12222,7 +12514,8 @@ static qboolean UI_HandleSplitScreenPlayerSetupKey( int key, qboolean down )
 	player = UI_SplitScreenInputTargetPlayer();
 	UI_SplitScreenSetupPointToMenu( player, uiInfo.uiDC.cursorx, uiInfo.uiDC.cursory, &menuX, &menuY );
 	trap->Cvar_VariableStringBuffer( UI_SplitScreenInputCvarName( player ), inputName, sizeof( inputName ) );
-	controllerNavigation = (qboolean)( !Q_stricmpn( inputName, "controller", 10 ) &&
+	controllerInput = (qboolean)!Q_stricmpn( inputName, "controller", 10 );
+	controllerNavigation = (qboolean)( controllerInput &&
 		( key == A_CURSOR_LEFT || key == A_CURSOR_RIGHT || key == A_CURSOR_UP || key == A_CURSOR_DOWN ||
 		  key == A_ENTER || key == A_KP_ENTER || key == A_BACKSPACE ) );
 
@@ -12254,9 +12547,70 @@ static qboolean UI_HandleSplitScreenPlayerSetupKey( int key, qboolean down )
 		Menus_ActivateByName( "ingame_playerforce" );
 		return qtrue;
 	}
+	if ( menu == Menus_FindByName( "ingame_player" ) ) {
+		itemDef_t *focused = UI_SplitScreenFocusedItem( menu );
+		const char *focusedName = focused && focused->window.name ? focused->window.name : "";
+		const char *forceArg = NULL;
+		qboolean bottomAction = qfalse;
+		int playerTeam = (int)trap->Cvar_VariableValue( "ui_myteam" );
+
+		if ( player > 1 ) {
+			char playerTeamValue[16] = {0};
+			trap->Cvar_VariableStringBuffer( va( "cl_splitScreenP%i_ui_myteam", player ), playerTeamValue, sizeof( playerTeamValue ) );
+			if ( playerTeamValue[0] ) {
+				playerTeam = atoi( playerTeamValue );
+			}
+			if ( trap->Cvar_VariableValue( va( "cl_splitScreenP%iSpectator", player ) ) ) {
+				playerTeam = TEAM_SPECTATOR;
+			}
+		}
+
+		if ( rawKey == A_JOY7 ) {
+			bottomAction = qtrue;
+			if ( playerTeam == TEAM_SPECTATOR ) forceArg = "free";
+		} else if ( rawKey == A_JOY3 ) {
+			forceArg = "s";
+			bottomAction = qtrue;
+		} else if ( controllerInput && key == A_ENTER && Q_stricmpn( focusedName, "apply", 5 ) ) {
+			UI_FocusSplitScreenPlayerAction( menu, (qboolean)( playerTeam == TEAM_SPECTATOR ) );
+			return qtrue;
+		} else if ( controllerInput && key == A_ENTER && !Q_stricmpn( focusedName, "apply", 5 ) ) {
+			bottomAction = qtrue;
+			if ( !Q_stricmp( focusedName, "applyred" ) ) forceArg = "red";
+			else if ( !Q_stricmp( focusedName, "applyblue" ) ) forceArg = "blue";
+			else if ( !Q_stricmp( focusedName, "applyspectate" ) ) forceArg = "s";
+			else if ( !Q_stricmp( focusedName, "applyjoin" ) ) forceArg = "free";
+		} else if ( !controllerInput && key == A_MOUSE1 && menuY >= 412 && menuY <= 444 ) {
+			bottomAction = qtrue;
+			if ( menuX >= 320 ) forceArg = "s";
+			else if ( menuX >= 215 ) forceArg = "blue";
+			else if ( menuX >= 110 ) forceArg = "red";
+			else if ( playerTeam == TEAM_SPECTATOR ) forceArg = "free";
+		}
+
+		if ( bottomAction ) {
+			char command[64];
+
+		UI_SaveSplitScreenPlayerProfile( player );
+		UI_ApplySplitScreenPlayerProfile( player );
+			if ( forceArg ) {
+				Com_sprintf( command, sizeof( command ), "forcechanged %s", forceArg );
+				UI_SplitScreenSendPlayerCommand( player, command );
+			} else {
+				UI_SplitScreenSendPlayerCommand( player, "forcechanged" );
+			}
+			UI_CloseSplitScreenOverlay();
+			return qtrue;
+		}
+	}
 
 	if ( controllerNavigation && menu == Menus_FindByName( "ingame_player" ) &&
 		( key == A_CURSOR_LEFT || key == A_CURSOR_RIGHT || key == A_CURSOR_UP || key == A_CURSOR_DOWN ) ) {
+		itemDef_t *focused = UI_SplitScreenFocusedItem( menu );
+		if ( focused && focused->window.name && !Q_stricmpn( focused->window.name, "apply", 5 ) ) {
+			UI_MoveSplitScreenControlsFocus( menu, key, qfalse );
+			return qtrue;
+		}
 		if ( UI_HandleSplitScreenCharacterGridKey( menu, player, key, down ) ) {
 			trap->Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
 		}
@@ -12295,6 +12649,15 @@ static qboolean UI_SplitScreenPlayerHasNetworkClient( int player )
 	return (qboolean)( player > 1 && trap->Cvar_VariableValue( va( "cl_splitScreenP%iClientNum", player ) ) >= 0 );
 }
 
+static qboolean UI_SplitScreenNetworkPartyAvailable( void )
+{
+	char target[MAX_OSPATH] = {0};
+
+	trap->Cvar_VariableStringBuffer( "cl_splitScreenPartyTarget", target, sizeof( target ) );
+	return (qboolean)( trap->Cvar_VariableValue( "cl_splitScreen" ) &&
+		!trap->Cvar_VariableValue( "cl_splitScreenLocalCmds" ) && target[0] );
+}
+
 static void UI_ApplySplitScreenPlayerProfile( int player )
 {
 	if ( player <= 1 ) {
@@ -12302,7 +12665,9 @@ static void UI_ApplySplitScreenPlayerProfile( int player )
 		return;
 	}
 	if ( UI_SplitScreenPlayerHasNetworkClient( player ) ) {
-		trap->Cmd_ExecuteText( EXEC_APPEND, va( "splitnet_applyprofile %i\n", player ) );
+		trap->Cmd_ExecuteText( EXEC_NOW, va( "splitnet_applyprofile %i\n", player ) );
+	} else if ( UI_SplitScreenNetworkPartyAvailable() ) {
+		return;
 	} else {
 		trap->Cmd_ExecuteText( EXEC_APPEND, va( "cmd splitscreen_applyprofile %i\n", player ) );
 	}
@@ -12311,26 +12676,30 @@ static void UI_ApplySplitScreenPlayerProfile( int player )
 static void UI_SplitScreenSendPlayerCommand( int player, const char *command )
 {
 	if ( player == 1 ) {
-		trap->Cmd_ExecuteText( EXEC_INSERT, va( "cmd %s\n", command ) );
+		trap->Cmd_ExecuteText( EXEC_NOW, va( "cmd %s\n", command ) );
 		return;
 	}
 
 	if ( UI_SplitScreenPlayerHasNetworkClient( player ) ) {
-		trap->Cmd_ExecuteText( EXEC_INSERT, va( "splitnet_cmd %i %s\n", player, command ) );
+		trap->Cmd_ExecuteText( EXEC_NOW, va( "splitnet_cmd %i %s\n", player, command ) );
+		return;
+	}
+	if ( UI_SplitScreenNetworkPartyAvailable() ) {
+		trap->Cmd_ExecuteText( EXEC_NOW, va( "splitnet_rejoin %i %s\n", player, command ) );
 		return;
 	}
 
 	if ( !Q_stricmpn( command, "team ", 5 ) ) {
 		const char *team = command + 5;
 		if ( !Q_stricmp( team, "s" ) || !Q_stricmp( team, "spectator" ) ) {
-			trap->Cmd_ExecuteText( EXEC_INSERT, va( "cmd splitscreen_spectate %i\n", player ) );
+			trap->Cmd_ExecuteText( EXEC_NOW, va( "cmd splitscreen_spectate %i\n", player ) );
 		} else {
-			trap->Cmd_ExecuteText( EXEC_INSERT, va( "cmd splitscreen_join %i %s\n", player, team ) );
+			trap->Cmd_ExecuteText( EXEC_NOW, va( "cmd splitscreen_join %i %s\n", player, team ) );
 		}
 		return;
 	}
 
-	trap->Cmd_ExecuteText( EXEC_INSERT, va( "cmd %s\n", command ) );
+	trap->Cmd_ExecuteText( EXEC_NOW, va( "cmd %s\n", command ) );
 }
 
 static int UI_SplitScreenJoinMaxRow( void )
@@ -12505,7 +12874,7 @@ static int UI_SplitScreenJoinRowForMenuPoint( int menuY )
 
 static void UI_UpdateSplitScreenActionRowFromCursor( const char *mode )
 {
-	int player = UI_SplitScreenSetupPlayerForPoint( uiInfo.uiDC.cursorx, uiInfo.uiDC.cursory );
+	int player = UI_SplitScreenInputTargetPlayer();
 	int menuX;
 	int menuY;
 	int row = 0;
@@ -12527,6 +12896,50 @@ static void UI_UpdateSplitScreenActionRowFromCursor( const char *mode )
 		}
 		UI_SplitScreenSetActionRow( row, 2 );
 	}
+}
+
+static qboolean UI_HandleSplitScreenStockKey( int key, qboolean down )
+{
+	char menuName[64];
+	menuDef_t *menu;
+	menuDef_t *focused;
+	int player;
+
+	if ( !UI_SplitScreenModeVisible( "stock" ) ) {
+		return qfalse;
+	}
+	if ( !down ) {
+		return qtrue;
+	}
+
+	player = UI_SplitScreenInputTargetPlayer();
+	key = UI_NormalizeSplitScreenMenuKey( key );
+	if ( key == A_ESCAPE ) {
+		UI_ReturnToSplitScreenTopMenu( player );
+		return qtrue;
+	}
+
+	trap->Cvar_VariableStringBuffer( "ui_splitScreenStockMenu", menuName, sizeof( menuName ) );
+	menu = Menus_FindByName( menuName );
+	if ( !menu ) {
+		UI_ReturnToSplitScreenTopMenu( player );
+		return qtrue;
+	}
+
+	menu->window.flags |= ( WINDOW_FORCED | WINDOW_VISIBLE );
+	Menu_HandleKey( menu, key, down );
+	focused = Menu_GetFocused();
+	if ( focused && focused->window.name && Q_stricmp( focused->window.name, "ingame" ) ) {
+		trap->Cvar_Set( "ui_splitScreenStockMenu", focused->window.name );
+	} else if ( focused && focused->window.name && !Q_stricmp( focused->window.name, "ingame" ) ) {
+		UI_ReturnToSplitScreenTopMenu( player );
+	} else if ( key == A_ESCAPE ) {
+		UI_ReturnToSplitScreenTopMenu( player );
+	} else if ( !( trap->Key_GetCatcher() & KEYCATCH_UI ) ) {
+		trap->Cvar_Set( "ui_splitScreenMenuMode", "" );
+		trap->Cvar_Set( "ui_splitScreenInputTarget", "0" );
+	}
+	return qtrue;
 }
 
 static qboolean UI_HandleSplitScreenControlsKey( int key, qboolean down )
@@ -12575,7 +12988,10 @@ static qboolean UI_HandleSplitScreenControlsKey( int key, qboolean down )
 		uiInfo.uiDC.cursory = menuY;
 		Menu_HandleMouseMove( menu, menuX, menuY );
 	}
-	Menu_HandleKey( menu, key, down );
+	if ( !controllerNavigation || !UI_MoveSplitScreenControlsFocus( menu, key, qfalse ) ) {
+		Menu_HandleKey( menu, key, down );
+	}
+	UI_SaveSplitScreenControlsState( menu, player );
 	{
 		itemDef_t *focused = UI_SplitScreenFocusedItem( menu );
 		trap->Cvar_Set( "ui_splitScreenFocusedItem", focused && focused->window.name ? focused->window.name : "" );
@@ -12594,6 +13010,7 @@ static qboolean UI_HandleSplitScreenIngameKey( int key, qboolean down )
 	int menuY;
 	int oldX;
 	int oldY;
+	qboolean focusMoved = qfalse;
 	qboolean controllerNavigation;
 	char inputName[32] = {0};
 
@@ -12631,13 +13048,21 @@ static qboolean UI_HandleSplitScreenIngameKey( int key, qboolean down )
 
 	oldX = uiInfo.uiDC.cursorx;
 	oldY = uiInfo.uiDC.cursory;
-	menu->window.flags |= WINDOW_FORCED;
+	menu->window.flags |= ( WINDOW_FORCED | WINDOW_VISIBLE );
+	UI_PrepareSplitScreenIngameTopMenu( menu );
+	UI_LoadSplitScreenTopCursor( menu, player );
+	if ( controllerNavigation ) {
+		focusMoved = UI_MoveSplitScreenControlsFocus( menu, key, qtrue );
+	}
 	if ( !controllerNavigation ) {
 		uiInfo.uiDC.cursorx = menuX;
 		uiInfo.uiDC.cursory = menuY;
 		Menu_HandleMouseMove( menu, menuX, menuY );
 	}
-	Menu_HandleKey( menu, key, down );
+	if ( !focusMoved ) {
+		Menu_HandleKey( menu, key, down );
+	}
+	UI_SaveSplitScreenTopCursor( menu, player );
 	{
 		itemDef_t *focused = UI_SplitScreenFocusedItem( menu );
 		trap->Cvar_Set( "ui_splitScreenFocusedItem", focused && focused->window.name ? focused->window.name : "<none>" );
@@ -12667,10 +13092,21 @@ static qboolean UI_HandleSplitScreenIngameKey( int key, qboolean down )
 		return qtrue;
 	}
 	if ( UI_MenuIsVisible( "ingame_setup" ) || UI_MenuIsVisible( "ingame_about" ) || UI_MenuIsVisible( "ingame_addbot" ) || UI_MenuIsVisible( "ingame_vote" ) || UI_MenuIsVisible( "ingame_callvote" ) || UI_MenuIsVisible( "ingame_objectives" ) || UI_MenuIsVisible( "ingame_voicechat" ) ) {
+		static const char *stockMenus[] = {
+			"ingame_setup", "ingame_about", "ingame_addbot", "ingame_vote",
+			"ingame_callvote", "ingame_objectives", "ingame_voicechat"
+		};
+		int stockIndex;
+		for ( stockIndex = 0; stockIndex < (int)ARRAY_LEN( stockMenus ); stockIndex++ ) {
+			if ( UI_MenuIsVisible( stockMenus[stockIndex] ) ) {
+				trap->Cvar_Set( "ui_splitScreenStockMenu", stockMenus[stockIndex] );
+				UI_OpenSplitScreenModeForPlayer( "stock", player );
+				break;
+			}
+		}
 		trap->Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
 		trap->Cvar_Set( "ui_splitScreenInputTarget", va( "%i", player ) );
 		trap->Cvar_Set( "ui_splitScreenConfiguring", "0" );
-		trap->Cvar_Set( "ui_splitScreenMenuMode", "" );
 		uiInfo.uiDC.cursorx = oldX;
 		uiInfo.uiDC.cursory = oldY;
 		return qtrue;
@@ -12729,14 +13165,22 @@ void UI_Refresh( int realtime )
 	UI_UpdateSplitScreenKeyboardTrigger();
 
 	if ( UI_SplitScreenModeVisible( "join" ) ) {
+		trap->Cvar_Set( "ui_splitScreenLastPaint", "join" );
 		UI_PaintSplitScreenJoinMenu();
 	} else if ( UI_SplitScreenModeVisible( "exit" ) ) {
+		trap->Cvar_Set( "ui_splitScreenLastPaint", "exit" );
 		UI_PaintSplitScreenExitMenu();
 	} else if ( UI_SplitScreenModeVisible( "controls" ) ) {
+		trap->Cvar_Set( "ui_splitScreenLastPaint", "controls" );
 		UI_PaintSplitScreenControlsMenu();
+	} else if ( UI_SplitScreenModeVisible( "stock" ) ) {
+		trap->Cvar_Set( "ui_splitScreenLastPaint", "stock" );
+		UI_PaintSplitScreenScopedStockMenu();
 	} else if ( UI_SplitScreenPlayerSetupVisible() ) {
+		trap->Cvar_Set( "ui_splitScreenLastPaint", "setup" );
 		UI_PaintSplitScreenPlayerSetup();
 	} else if ( UI_SplitScreenIngameVisible() ) {
+		trap->Cvar_Set( "ui_splitScreenLastPaint", "top" );
 		UI_PaintSplitScreenIngameMenus();
 	} else if (Menu_Count() > 0) {
 		// paint all the menus
@@ -12751,7 +13195,16 @@ void UI_Refresh( int realtime )
 	// draw cursor
 	UI_SetColor( NULL );
 	if (Menu_Count() > 0 && (trap->Key_GetCatcher() & KEYCATCH_UI)) {
-		UI_DrawHandlePic( (float)uiInfo.uiDC.cursorx, (float)uiInfo.uiDC.cursory, 40.0f, 40.0f, uiInfo.uiDC.Assets.cursor);
+		qboolean drawCursor = qtrue;
+		if ( trap->Cvar_VariableValue( "cl_splitScreen" ) ) {
+			int player = UI_SplitScreenInputTargetPlayer();
+			char inputName[32];
+			trap->Cvar_VariableStringBuffer( UI_SplitScreenInputCvarName( player ), inputName, sizeof( inputName ) );
+			drawCursor = (qboolean)Q_stricmpn( inputName, "controller", 10 );
+		}
+		if ( drawCursor ) {
+			UI_DrawHandlePic( (float)uiInfo.uiDC.cursorx, (float)uiInfo.uiDC.cursory, 40.0f, 40.0f, uiInfo.uiDC.Assets.cursor);
+		}
 		//UI_DrawHandlePic( uiInfo.uiDC.cursorx, uiInfo.uiDC.cursory, 48, 48, uiInfo.uiDC.Assets.cursor);
 	}
 
@@ -12873,6 +13326,9 @@ void UI_KeyEvent( int key, qboolean down ) {
 	if ( UI_HandleSplitScreenExitKey( key, down ) ) {
 		return;
 	}
+	if ( UI_HandleSplitScreenStockKey( key, down ) ) {
+		return;
+	}
 	if ( UI_HandleSplitScreenControlsKey( key, down ) ) {
 		return;
 	}
@@ -12931,9 +13387,31 @@ void UI_MouseEvent( int dx, int dy )
 		UI_UpdateSplitScreenActionRowFromCursor( "exit" );
 		return;
 	}
+	if ( UI_SplitScreenModeVisible( "stock" ) ) {
+		char menuName[64];
+		menuDef_t *menu;
+		int player = UI_SplitScreenInputTargetPlayer();
+		int menuX;
+		int menuY;
+		int oldX = uiInfo.uiDC.cursorx;
+		int oldY = uiInfo.uiDC.cursory;
+
+		trap->Cvar_VariableStringBuffer( "ui_splitScreenStockMenu", menuName, sizeof( menuName ) );
+		menu = Menus_FindByName( menuName );
+		if ( menu ) {
+			UI_SplitScreenSetupPointToMenu( player, oldX, oldY, &menuX, &menuY );
+			uiInfo.uiDC.cursorx = menuX;
+			uiInfo.uiDC.cursory = menuY;
+			menu->window.flags |= ( WINDOW_FORCED | WINDOW_VISIBLE );
+			Menu_HandleMouseMove( menu, menuX, menuY );
+			uiInfo.uiDC.cursorx = oldX;
+			uiInfo.uiDC.cursory = oldY;
+		}
+		return;
+	}
 	if ( UI_SplitScreenModeVisible( "controls" ) ) {
 		menuDef_t *menu;
-		int player = UI_SplitScreenSetupPlayerForPoint( uiInfo.uiDC.cursorx, uiInfo.uiDC.cursory );
+		int player = UI_SplitScreenInputTargetPlayer();
 		int menuX;
 		int menuY;
 		int oldX = uiInfo.uiDC.cursorx;
@@ -12955,7 +13433,7 @@ void UI_MouseEvent( int dx, int dy )
 	}
 	if ( UI_SplitScreenPlayerSetupVisible() ) {
 		menuDef_t *menu;
-		int player = UI_SplitScreenSetupPlayerForPoint( uiInfo.uiDC.cursorx, uiInfo.uiDC.cursory );
+		int player = UI_SplitScreenInputTargetPlayer();
 		int menuX;
 		int menuY;
 		int oldX = uiInfo.uiDC.cursorx;
@@ -12976,7 +13454,7 @@ void UI_MouseEvent( int dx, int dy )
 	}
 	if ( UI_SplitScreenIngameVisible() ) {
 		menuDef_t *menu;
-		int player = UI_SplitScreenSetupPlayerForPoint( uiInfo.uiDC.cursorx, uiInfo.uiDC.cursory );
+		int player = UI_SplitScreenInputTargetPlayer();
 		int menuX;
 		int menuY;
 		int oldX = uiInfo.uiDC.cursorx;
@@ -12989,8 +13467,11 @@ void UI_MouseEvent( int dx, int dy )
 		if ( menu ) {
 			uiInfo.uiDC.cursorx = menuX;
 			uiInfo.uiDC.cursory = menuY;
-			menu->window.flags |= WINDOW_FORCED;
+			menu->window.flags |= ( WINDOW_FORCED | WINDOW_VISIBLE );
+			UI_PrepareSplitScreenIngameTopMenu( menu );
+			UI_LoadSplitScreenTopCursor( menu, player );
 			Menu_HandleMouseMove( menu, menuX, menuY );
+			UI_SaveSplitScreenTopCursor( menu, player );
 			uiInfo.uiDC.cursorx = oldX;
 			uiInfo.uiDC.cursory = oldY;
 		}

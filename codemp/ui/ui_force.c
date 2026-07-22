@@ -54,6 +54,7 @@ static void UI_ForceApplySplitScreenPlayerProfile( int player )
 {
 	if ( UI_ForceSplitScreenPlayerHasNetworkClient( player ) ) {
 		trap->Cmd_ExecuteText( EXEC_APPEND, va( "splitnet_applyprofile %i\n", player ) );
+		trap->Cmd_ExecuteText( EXEC_APPEND, va( "splitnet_cmd %i forcechanged\n", player ) );
 	} else {
 		trap->Cmd_ExecuteText( EXEC_APPEND, va( "cmd splitscreen_applyprofile %i\n", player ) );
 	}
@@ -221,6 +222,15 @@ void UI_UpdateClientForcePowers(const char *teamArg)
 		}
 		trap->Cvar_Set( va( "ui_splitScreenP%iForcePowers", splitTarget ), forceString );
 		UI_ForceApplySplitScreenPlayerProfile( splitTarget );
+		if ( teamArg && teamArg[0] ) {
+			if ( UI_ForceSplitScreenPlayerHasNetworkClient( splitTarget ) ) {
+				trap->Cmd_ExecuteText( EXEC_APPEND, va( "splitnet_cmd %i team %s\n", splitTarget, teamArg ) );
+			} else if ( !Q_stricmp( teamArg, "s" ) || !Q_stricmp( teamArg, "spectator" ) ) {
+				trap->Cmd_ExecuteText( EXEC_APPEND, va( "cmd splitscreen_spectate %i\n", splitTarget ) );
+			} else {
+				trap->Cmd_ExecuteText( EXEC_APPEND, va( "cmd splitscreen_join %i %s\n", splitTarget, teamArg ) );
+			}
+		}
 		gTouchedForce = qfalse;
 		return;
 	}

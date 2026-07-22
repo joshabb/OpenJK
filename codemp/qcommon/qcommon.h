@@ -270,11 +270,14 @@ typedef enum vmSlots_e {
 	VM_GAME=0,
 	VM_CGAME,
 	VM_UI,
+	VM_CGAME2,
+	VM_CGAME3,
+	VM_CGAME4,
 	MAX_VM
 } vmSlots_t;
 
 typedef struct vm_s {
-	vmSlots_t	slot; // VM_GAME, VM_CGAME, VM_UI
+	vmSlots_t	slot;
     char		name[MAX_QPATH];
 	void		*dllHandle;
 	qboolean	isLegacy; // uses the legacy syscall/vm_call api, is set by VM_CreateLegacy
