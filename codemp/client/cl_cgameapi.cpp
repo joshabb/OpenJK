@@ -471,6 +471,20 @@ static void _CL_SetUserCmdValue( int stateValue, float sensitivityScale, float m
 }
 
 static void CL_OpenUIMenu( int menuID ) {
+	/*
+	 * Force-rank/team server commands automatically request the stock global
+	 * player/class menu. In split-screen every profile was already selected by
+	 * the routed setup UI; opening this global overlay paints all panes and
+	 * destroys modal ownership before a player-scoped menu is requested.
+	 * Explicit split-screen top/setup menus use UIVM_SetActiveMenu directly and
+	 * are therefore unaffected.
+	 */
+	if ( Cvar_VariableIntegerValue( "cl_splitScreen" ) &&
+		( menuID == UIMENU_PLAYERCONFIG || menuID == UIMENU_CLASSSEL ) ) {
+		Com_DPrintf( "Split-screen: suppressed automatic global UI menu %i for player %i\n",
+			menuID, CGVM_ActivePlayer() );
+		return;
+	}
 	if ( CL_SplitNetSuppressAutomaticMenu( CGVM_ActivePlayer(), menuID ) ) {
 		return;
 	}
@@ -976,10 +990,17 @@ static const char *CGVM_CvarName( const char *name, qboolean *profile ) {
 }
 
 static void CGVM_Cvar_Register( vmCvar_t *vmCvar, const char *varName, const char *defaultValue, uint32_t flags ) {
-	qboolean profile;
-	const char *mappedName = CGVM_CvarName( varName, &profile );
+	const int player = CGVM_ActivePlayer();
+	const char *mappedName = CGVM_CvarName( varName, NULL );
 
-	if ( profile ) {
+	/*
+	 * A secondary cgame's cvars are local state, even when the stock cgame
+	 * declares the original name as USERINFO.  Letting a namespaced P2-P4
+	 * cvar retain that flag dirties Player 1's aggregate userinfo and can send
+	 * a primary-client update every time a secondary view changes it.
+	 * Secondary profiles are sent explicitly by splitnet_applyprofile.
+	 */
+	if ( player > 1 && Q_stricmp( mappedName, varName ) ) {
 		flags &= ~CVAR_USERINFO;
 	}
 	Cvar_Register( vmCvar, mappedName, defaultValue, flags );

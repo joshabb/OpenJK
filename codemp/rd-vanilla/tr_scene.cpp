@@ -117,34 +117,6 @@ void R_AddPolygonSurfaces( void ) {
 	}
 }
 
-static void R_RenderSplitScreenViews( const viewParms_t *baseParms ) {
-	viewParms_t splitParms;
-	const qboolean vertical = ( r_splitScreenLayout->integer != 0 ) ? qtrue : qfalse;
-
-	splitParms = *baseParms;
-
-	if ( vertical ) {
-		splitParms.viewportWidth = baseParms->viewportWidth / 2;
-		R_RenderView( &splitParms );
-
-		splitParms = *baseParms;
-		splitParms.viewportX = baseParms->viewportX + ( baseParms->viewportWidth / 2 );
-		splitParms.viewportWidth = baseParms->viewportWidth - ( baseParms->viewportWidth / 2 );
-		R_RenderView( &splitParms );
-	} else {
-		const int lowerHeight = baseParms->viewportHeight / 2;
-		const int upperHeight = baseParms->viewportHeight - lowerHeight;
-
-		splitParms.viewportY = baseParms->viewportY + lowerHeight;
-		splitParms.viewportHeight = upperHeight;
-		R_RenderView( &splitParms );
-
-		splitParms = *baseParms;
-		splitParms.viewportHeight = lowerHeight;
-		R_RenderView( &splitParms );
-	}
-}
-
 /*
 =====================
 RE_AddPolyToScene
@@ -260,12 +232,17 @@ void RE_AddRefEntityToScene( const refEntity_t *ent ) {
 		return;
 	}
 
-#ifdef _DEBUG
-	if (ent->reType == RT_MODEL)
+	if ( ent->reType == RT_MODEL && !ent->hModel && !ent->ghoul2 && !ent->customShader )
 	{
-		assert(ent->hModel || ent->ghoul2 || ent->customShader);
+		static qboolean warnedMissingModel = qfalse;
+		if ( !warnedMissingModel )
+		{
+			warnedMissingModel = qtrue;
+			ri.Printf( PRINT_WARNING,
+				"RE_AddRefEntityToScene: dropping RT_MODEL with no model, Ghoul2 instance, or custom shader\n" );
+		}
+		return;
 	}
-#endif
 
 	if ( (int)ent->reType < 0 || ent->reType >= RT_MAX_REF_ENTITY_TYPE ) {
 		Com_Error( ERR_DROP, "RE_AddRefEntityToScene: bad reType %i", ent->reType );
@@ -572,11 +549,10 @@ void RE_RenderScene( const refdef_t *fd ) {
 
 	VectorCopy( fd->vieworg, parms.pvsOrigin );
 
-	if ( r_splitScreen->integer ) {
-		R_RenderSplitScreenViews( &parms );
-	} else {
-		R_RenderView( &parms );
-	}
+	// Cgame submits one already-partitioned refdef for each local player.
+	// Rendering that rectangle exactly once keeps viewport ownership in one
+	// layer and prevents a stale r_splitScreen value from subdividing it again.
+	R_RenderView( &parms );
 
 	// the next scene rendered in this frame will tack on after this one
 	r_firstSceneDrawSurf = tr.refdef.numDrawSurfs;

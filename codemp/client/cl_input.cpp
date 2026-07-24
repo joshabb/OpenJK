@@ -65,7 +65,10 @@ static qboolean cl_splitScreenViewInitialized[5] = { qfalse, qfalse, qfalse, qfa
 static int cl_splitScreenNextCmdTime[5] = { 0, 0, 0, 0, 0 };
 static int cl_splitScreenControllerAxis[5][MAX_JOYSTICK_AXIS];
 static qboolean cl_splitScreenControllerButtons[5][16];
-static qboolean cl_splitScreenPreviousControllerButtons[5][16];
+static qboolean cl_splitScreenControllerButtonPressed[5][16];
+static qboolean cl_splitScreenControllerButtonReleased[5][16];
+static qboolean cl_splitScreenWasDead[5];
+static qboolean cl_splitScreenAttackBlockedUntilRelease[5];
 static qboolean cl_splitScreenConsoleChordDown[5];
 
 static int CL_SplitScreenPlayerForInputDevice( const char *deviceName );
@@ -1006,9 +1009,15 @@ void CL_SplitScreenSetControllerButton( int player, int button, qboolean pressed
 	if ( player < 1 || player > 4 || button < 0 || button >= (int)ARRAY_LEN( cl_splitScreenControllerButtons[player] ) ) {
 		return;
 	}
+	if ( pressed && !cl_splitScreenControllerButtons[player][button] ) {
+		cl_splitScreenControllerButtonPressed[player][button] = qtrue;
+	}
+	if ( !pressed && cl_splitScreenControllerButtons[player][button] ) {
+		cl_splitScreenControllerButtonReleased[player][button] = qtrue;
+	}
 	cl_splitScreenControllerButtons[player][button] = pressed;
 
-	if ( cl_splitScreenControllerButtons[player][6] && cl_splitScreenControllerButtons[player][7] ) {
+	if ( cl_splitScreenControllerButtons[player][4] && cl_splitScreenControllerButtons[player][6] ) {
 		if ( !cl_splitScreenConsoleChordDown[player] ) {
 			Con_ToggleConsoleForPlayer( player );
 			cl_splitScreenConsoleChordDown[player] = qtrue;
@@ -1263,25 +1272,45 @@ static void CL_SplitInputAssertCmd_f( void )
 		SHORT2ANGLE( cmd.angles[ROLL] ) );
 }
 
-static void CL_SplitInputClear_f( void )
+void CL_SplitScreenClearControllerState( int player )
 {
-	int player;
 	int axis;
 	int button;
 
+	if ( player < 1 || player > 4 ) {
+		return;
+	}
+
+	for ( axis = 0; axis < MAX_JOYSTICK_AXIS; axis++ ) {
+		cl_splitScreenControllerAxis[player][axis] = 0;
+	}
+	for ( button = 0; button < (int)ARRAY_LEN( cl_splitScreenControllerButtons[player] ); button++ ) {
+		cl_splitScreenControllerButtons[player][button] = qfalse;
+	}
+	Com_Memset( cl_splitScreenControllerButtonPressed[player], 0,
+		sizeof( cl_splitScreenControllerButtonPressed[player] ) );
+	Com_Memset( cl_splitScreenControllerButtonReleased[player], 0,
+		sizeof( cl_splitScreenControllerButtonReleased[player] ) );
+	cl_splitScreenConsoleChordDown[player] = qfalse;
+	cl_splitScreenWasDead[player] = qfalse;
+	cl_splitScreenAttackBlockedUntilRelease[player] = qfalse;
+}
+
+static void CL_SplitInputClear_f( void )
+{
+	int player;
+
 	if ( Cmd_Argc() != 2 ) {
-		Com_Printf( "usage: splitinput_clear <player 2-4>\n" );
+		Com_Printf( "usage: splitinput_clear <player 1-4>\n" );
 		return;
 	}
 
 	player = atoi( Cmd_Argv( 1 ) );
-	for ( axis = 0; axis < MAX_JOYSTICK_AXIS; axis++ ) {
-		CL_SplitScreenSetControllerAxis( player, axis, 0 );
+	if ( player < 1 || player > 4 ) {
+		Com_Printf( "splitinput_clear: invalid player %i\n", player );
+		return;
 	}
-	for ( button = 0; button < (int)ARRAY_LEN( cl_splitScreenControllerButtons[player] ); button++ ) {
-		CL_SplitScreenSetControllerButton( player, button, qfalse );
-	}
-	cl_splitScreenConsoleChordDown[player] = qfalse;
+	CL_SplitScreenClearControllerState( player );
 }
 
 /*
@@ -1371,6 +1400,13 @@ static qboolean CL_SplitScreenButtonDown( int player, int offset ) {
 	return qfalse;
 }
 
+static qboolean CL_SplitScreenButtonPressed( int player, int offset ) {
+	if ( offset >= 0 && offset < (int)ARRAY_LEN( cl_splitScreenControllerButtonPressed[player] ) ) {
+		return cl_splitScreenControllerButtonPressed[player][offset];
+	}
+	return qfalse;
+}
+
 static qboolean CL_SplitScreenCommandDown( int player, const char *command ) {
 	int i;
 
@@ -1393,17 +1429,32 @@ static qboolean CL_SplitScreenCommandPressed( int player, const char *command ) 
 			continue;
 		}
 		button = cl_splitScreenBindButton[player][i]->integer;
-		return (qboolean)( CL_SplitScreenButtonDown( player, button ) &&
-			button >= 0 && button < (int)ARRAY_LEN( cl_splitScreenPreviousControllerButtons[player] ) &&
-			!cl_splitScreenPreviousControllerButtons[player][button] );
+		return CL_SplitScreenButtonPressed( player, button );
 	}
 
 	return qfalse;
 }
 
+static qboolean CL_SplitScreenCommandReleased( int player, const char *command ) {
+	int i;
+	for ( i = 0; i < (int)ARRAY_LEN( cl_splitScreenBindCommands ); i++ ) {
+		int button;
+		if ( Q_stricmp( cl_splitScreenBindCommands[i], command ) ) {
+			continue;
+		}
+		button = cl_splitScreenBindButton[player][i]->integer;
+		return (qboolean)( button >= 0 &&
+			button < (int)ARRAY_LEN( cl_splitScreenControllerButtonReleased[player] ) &&
+			cl_splitScreenControllerButtonReleased[player][button] );
+	}
+	return qfalse;
+}
+
 static void CL_SplitScreenRememberControllerButtons( int player ) {
-	Com_Memcpy( cl_splitScreenPreviousControllerButtons[player], cl_splitScreenControllerButtons[player],
-		sizeof( cl_splitScreenPreviousControllerButtons[player] ) );
+	Com_Memset( cl_splitScreenControllerButtonPressed[player], 0,
+		sizeof( cl_splitScreenControllerButtonPressed[player] ) );
+	Com_Memset( cl_splitScreenControllerButtonReleased[player], 0,
+		sizeof( cl_splitScreenControllerButtonReleased[player] ) );
 }
 
 static int CL_SplitScreenDefaultBindForCommand( const char *command, int bindIndex ) {
@@ -1463,6 +1514,22 @@ static int CL_SplitScreenBindIndexForCommand( const char *command ) {
 	return -1;
 }
 
+static qboolean CL_SplitScreenCommandIsButtonBindable( const char *command ) {
+	static const char *nonButtonCommands[] = {
+		"sensitivity", "ui_mousePitch", "movesideaxis", "moveforwardaxis",
+		"lookyawaxis", "lookpitchaxis", "cl_run", "cg_autoswitch",
+		"+mlook", "voicechat"
+	};
+	int i;
+
+	for ( i = 0; i < (int)ARRAY_LEN( nonButtonCommands ); i++ ) {
+		if ( !Q_stricmp( command, nonButtonCommands[i] ) ) {
+			return qfalse;
+		}
+	}
+	return qtrue;
+}
+
 static void CL_SplitScreenBindController_f( void ) {
 	int player;
 	int button;
@@ -1489,6 +1556,10 @@ static void CL_SplitScreenBindController_f( void ) {
 		Com_Printf( "splitscreen_bind_controller: unknown command '%s'\n", command );
 		return;
 	}
+	if ( !CL_SplitScreenCommandIsButtonBindable( command ) ) {
+		Com_Printf( "splitscreen_bind_controller: '%s' is a setting or unsupported global action, not a button binding\n", command );
+		return;
+	}
 
 	if ( button >= 0 ) {
 		for ( i = 0; i < (int)ARRAY_LEN( cl_splitScreenBindCommands ); i++ ) {
@@ -1504,6 +1575,50 @@ static void CL_SplitScreenBindController_f( void ) {
 
 static void CL_SplitScreenApplyButtonBindings( int player, usercmd_t *cmd ) {
 	int weapon;
+
+	if ( CL_SplitScreenCommandPressed( player, "+scores" ) ) {
+		CL_CGameConsoleCommandForPlayer( player, "+scores" );
+	}
+	if ( CL_SplitScreenCommandReleased( player, "+scores" ) ) {
+		CL_CGameConsoleCommandForPlayer( player, "-scores" );
+	}
+	if ( CL_SplitScreenCommandPressed( player, "messagemode" ) ) {
+		Con_MessageModeForPlayer( player, qfalse );
+	}
+	if ( CL_SplitScreenCommandPressed( player, "messagemode2" ) ) {
+		Con_MessageModeForPlayer( player, qtrue );
+	}
+	if ( CL_SplitScreenCommandPressed( player, "weapnext" ) ) {
+		CL_CGameConsoleCommandForPlayer( player, "weapnext" );
+	}
+	if ( CL_SplitScreenCommandPressed( player, "weapprev" ) ) {
+		CL_CGameConsoleCommandForPlayer( player, "weapprev" );
+	}
+	if ( CL_SplitScreenCommandPressed( player, "invnext" ) ) {
+		CL_CGameConsoleCommandForPlayer( player, "invnext" );
+	}
+	if ( CL_SplitScreenCommandPressed( player, "invprev" ) ) {
+		CL_CGameConsoleCommandForPlayer( player, "invprev" );
+	}
+	if ( CL_SplitScreenCommandPressed( player, "forcenext" ) ) {
+		CL_CGameConsoleCommandForPlayer( player, "forcenext" );
+	}
+	if ( CL_SplitScreenCommandPressed( player, "forceprev" ) ) {
+		CL_CGameConsoleCommandForPlayer( player, "forceprev" );
+	}
+	if ( CL_SplitScreenCommandPressed( player, "automap_toggle" ) ) {
+		CL_CGameConsoleCommandForPlayer( player, "splitscreen_automap_toggle" );
+	}
+	if ( CL_SplitScreenCommandPressed( player, "cg_thirdperson !" ) ) {
+		CL_CGameConsoleCommandForPlayer( player, "splitscreen_thirdperson_toggle" );
+	}
+	if ( CL_SplitScreenCommandPressed( player, "centerview" ) ) {
+		const int pitchDelta = player <= 1
+			? cl.snap.ps.delta_angles[PITCH]
+			: cl_splitClients[player].active.snap.ps.delta_angles[PITCH];
+		cl_splitScreenViewangles[player][PITCH] = -SHORT2ANGLE( pitchDelta );
+		cmd->angles[PITCH] = ANGLE2SHORT( cl_splitScreenViewangles[player][PITCH] );
+	}
 
 	if ( CL_SplitScreenCommandPressed( player, "saberAttackCycle" ) ) {
 		cmd->generic_cmd = GENCMD_SABERATTACKCYCLE;
@@ -1559,12 +1674,20 @@ static void CL_SplitScreenApplyButtonBindings( int player, usercmd_t *cmd ) {
 		cmd->rightmove = ClampChar( cmd->rightmove + 127 );
 	}
 	if ( CL_SplitScreenCommandDown( player, "+left" ) ) {
-		cl_splitScreenViewangles[player][YAW] += 0.001f * cls.frametime * cl_splitScreenSensitivity[player]->value * 127.0f;
-		cmd->angles[YAW] = ANGLE2SHORT( cl_splitScreenViewangles[player][YAW] );
+		if ( CL_SplitScreenCommandDown( player, "+strafe" ) ) {
+			cmd->rightmove = ClampChar( cmd->rightmove - 127 );
+		} else {
+			cl_splitScreenViewangles[player][YAW] += 0.001f * cls.frametime * cl_splitScreenSensitivity[player]->value * 127.0f;
+			cmd->angles[YAW] = ANGLE2SHORT( cl_splitScreenViewangles[player][YAW] );
+		}
 	}
 	if ( CL_SplitScreenCommandDown( player, "+right" ) ) {
-		cl_splitScreenViewangles[player][YAW] -= 0.001f * cls.frametime * cl_splitScreenSensitivity[player]->value * 127.0f;
-		cmd->angles[YAW] = ANGLE2SHORT( cl_splitScreenViewangles[player][YAW] );
+		if ( CL_SplitScreenCommandDown( player, "+strafe" ) ) {
+			cmd->rightmove = ClampChar( cmd->rightmove + 127 );
+		} else {
+			cl_splitScreenViewangles[player][YAW] -= 0.001f * cls.frametime * cl_splitScreenSensitivity[player]->value * 127.0f;
+			cmd->angles[YAW] = ANGLE2SHORT( cl_splitScreenViewangles[player][YAW] );
+		}
 	}
 	if ( CL_SplitScreenCommandDown( player, "+lookup" ) ) {
 		cl_splitScreenViewangles[player][PITCH] -= 0.001f * cls.frametime * cl_splitScreenSensitivity[player]->value * 127.0f;
@@ -1585,7 +1708,9 @@ static void CL_SplitScreenApplyButtonBindings( int player, usercmd_t *cmd ) {
 	if ( CL_SplitScreenCommandDown( player, "+speed" ) ) {
 		cmd->buttons |= BUTTON_WALKING;
 	}
-	if ( CL_SplitScreenCommandDown( player, "+attack" ) ) {
+	if ( !cl_splitScreenAttackBlockedUntilRelease[player] &&
+		( CL_SplitScreenCommandDown( player, "+attack" ) ||
+		CL_SplitScreenCommandPressed( player, "+attack" ) ) ) {
 		cmd->buttons |= BUTTON_ATTACK;
 	}
 	if ( CL_SplitScreenCommandDown( player, "+altattack" ) ) {
@@ -1655,6 +1780,7 @@ static int CL_SplitScreenPlayerForInputDevice( const char *deviceName ) {
 
 static void CL_SplitScreenCreateCmd( int player, usercmd_t *cmd ) {
 	float anglespeed;
+	qboolean dead;
 	const int moveSide = CL_SplitScreenAxisValue( player, cl_splitScreenMoveSideAxis[player] );
 	const int moveForward = CL_SplitScreenAxisValue( player, cl_splitScreenMoveForwardAxis[player] );
 	const int lookYaw = CL_SplitScreenAxisValue( player, cl_splitScreenLookYawAxis[player] );
@@ -1696,6 +1822,15 @@ static void CL_SplitScreenCreateCmd( int player, usercmd_t *cmd ) {
 		VectorCopy( cl.viewangles, cl_splitScreenViewangles[player] );
 		cl_splitScreenViewInitialized[player] = qtrue;
 	}
+
+	dead = (qboolean)( cl.snap.ps.pm_type == PM_DEAD || cl.snap.ps.stats[STAT_HEALTH] <= 0 );
+	if ( dead && !cl_splitScreenWasDead[player] && CL_SplitScreenCommandDown( player, "+attack" ) ) {
+		cl_splitScreenAttackBlockedUntilRelease[player] = qtrue;
+	}
+	if ( cl_splitScreenAttackBlockedUntilRelease[player] && !CL_SplitScreenCommandDown( player, "+attack" ) ) {
+		cl_splitScreenAttackBlockedUntilRelease[player] = qfalse;
+	}
+	cl_splitScreenWasDead[player] = dead;
 
 	anglespeed = 0.001f * cls.frametime * cl_splitScreenSensitivity[player]->value;
 	cl_splitScreenViewangles[player][YAW] += anglespeed * lookYaw;
@@ -2416,6 +2551,31 @@ void CL_SplitNetSendCmds( void )
 		if ( !split->enabled || split->state < CA_CONNECTED ) {
 			continue;
 		}
+		// Match the primary client's pure-server ordering: initialize cgame and
+		// send the checksum command before the first usermove. Sending usercmds
+		// earlier makes pure servers resend gamestate and reset validation.
+		if ( !split->cgameStarted ) {
+			connstate_t handshakeState = cls.state;
+
+			// Vanilla/local servers wait for one sequenced packet after
+			// connectResponse before sending gamestate. Send that empty
+			// acknowledgement, but do not create a usercmd until cgame has
+			// initialized and the pure checksum command has been queued.
+			savedCl = cl;
+			savedClc = clc;
+			cl = split->active;
+			clc = split->connection;
+			cls.state = split->state;
+			if ( CL_ReadyToSendPacket() ) {
+				CL_WritePacket();
+			}
+			split->active = cl;
+			split->connection = clc;
+			cl = savedCl;
+			clc = savedClc;
+			cls.state = handshakeState;
+			continue;
+		}
 		if ( split->connection.demoplaying || split->connection.netchan.remoteAddress.type == NA_BAD ) {
 			continue;
 		}
@@ -2684,6 +2844,17 @@ void CL_InitInput( void ) {
 	Cvar_Get( "ui_splitScreenP2Joined", "0", CVAR_ARCHIVE_ND, "Whether split-screen Player 2 is currently joined." );
 	Cvar_Get( "ui_splitScreenP3Joined", "0", CVAR_ARCHIVE_ND, "Whether split-screen Player 3 is currently joined." );
 	Cvar_Get( "ui_splitScreenP4Joined", "0", CVAR_ARCHIVE_ND, "Whether split-screen Player 4 is currently joined." );
+	/*
+	 * Menu scripts may only assign cvars that already exist.  Register the
+	 * transient setup-routing state before the front-end menus can open; a
+	 * fresh home otherwise drops the setup transition on the floor.
+	 */
+	Cvar_Get( "ui_splitScreenConfiguring", "0", 0, "Whether a split-screen profile is being configured." );
+	Cvar_Get( "ui_splitScreenMenuMode", "", 0, "Active split-screen UI composition mode." );
+	Cvar_Get( "ui_splitScreenPendingSetup", "0", 0, "Deferred split-screen player setup transition." );
+	Cvar_Get( "ui_splitScreenInputTarget", "0", 0, "Player targeted by the current split-screen input device." );
+	Cvar_Get( "ui_splitScreenLastInputDevice", "keyboard", 0, "Most recent split-screen UI input device." );
+	Cvar_Get( "ui_splitScreenLastPaint", "", 0, "Most recent split-screen UI composition path." );
 }
 
 /*

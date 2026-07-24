@@ -685,6 +685,64 @@ void CL_CGameKeyEventForPlayer( int player, int key, qboolean down ) {
 	CGVM_SelectPlayer( 1 );
 }
 
+static void CL_SwapSplitClientMemory( void *left, void *right, size_t size ) {
+	byte scratch[4096];
+	byte *a = (byte *)left;
+	byte *b = (byte *)right;
+
+	while ( size ) {
+		const size_t chunk = size < sizeof( scratch ) ? size : sizeof( scratch );
+		Com_Memcpy( scratch, a, chunk );
+		Com_Memcpy( a, b, chunk );
+		Com_Memcpy( b, scratch, chunk );
+		a += chunk;
+		b += chunk;
+		size -= chunk;
+	}
+}
+
+void CL_CGameConsoleCommandForPlayer( int player, const char *command ) {
+	char savedCommand[BIG_INFO_STRING];
+	connstate_t primaryState;
+	splitScreenClient_t *split;
+	const int savedCGamePlayer = CGVM_ActivePlayer();
+
+	if ( !command || !command[0] || player < 1 || player > MAX_SPLITSCREEN_PLAYERS ) {
+		return;
+	}
+	Q_strncpyz( savedCommand, Cmd_Cmd(), sizeof( savedCommand ) );
+	Cmd_TokenizeString( command );
+	if ( player == 1 ) {
+		if ( cls.cgameStarted && CGVM_SelectPlayer( 1 ) ) {
+			CGVM_ConsoleCommand();
+		}
+		CGVM_SelectPlayer( savedCGamePlayer );
+		Cvar_Set( "cl_splitScreenRenderPlayer", va( "%i", savedCGamePlayer ) );
+		Cmd_TokenizeString( savedCommand );
+		return;
+	}
+	split = &cl_splitClients[player];
+	if ( !split->enabled || !split->cgameStarted || !CGVM_SelectPlayer( player ) ) {
+		CGVM_SelectPlayer( savedCGamePlayer );
+		Cmd_TokenizeString( savedCommand );
+		return;
+	}
+	primaryState = cls.state;
+	CL_SwapSplitClientMemory( &cl, &split->active, sizeof( cl ) );
+	CL_SwapSplitClientMemory( &clc, &split->connection, sizeof( clc ) );
+	cls.state = split->state;
+	Cvar_Set( "cl_splitScreenRenderPlayer", va( "%i", player ) );
+	CGVM_ConsoleCommand();
+	split->state = cls.state;
+	CL_SwapSplitClientMemory( &cl, &split->active, sizeof( cl ) );
+	CL_SwapSplitClientMemory( &clc, &split->connection, sizeof( clc ) );
+	cls.state = primaryState;
+	Cvar_Set( "cl_splitScreenRenderPlayer", "1" );
+	CGVM_SelectPlayer( savedCGamePlayer );
+	Cvar_Set( "cl_splitScreenRenderPlayer", va( "%i", savedCGamePlayer ) );
+	Cmd_TokenizeString( savedCommand );
+}
+
 
 
 /*
@@ -1016,6 +1074,13 @@ void CL_SplitCGameFrame( void ) {
 			split->receivedGameState = qfalse;
 			split->cgameNeedsRestart = qfalse;
 			cls.state = CA_PRIMED;
+			// Pure servers validate every network client independently. The
+			// secondary clients share the primary filesystem, but still need
+			// their own reliable checksum command on their own netchan.
+			CL_SendSplitPureChecksums( player );
+			CL_WritePacket();
+			CL_WritePacket();
+			CL_WritePacket();
 		}
 
 		if ( split->cgameStarted ) {

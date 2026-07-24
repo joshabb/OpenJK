@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 BUILD_DIR="${OPENJK_BUILD_DIR:-$ROOT/build-arm64-native}"
 BIN="${OPENJK_BIN:-$BUILD_DIR/openjk.arm64.app/Contents/MacOS/openjk.arm64}"
+MODULE_ARCH="${OPENJK_MODULE_ARCH:-arm64}"
 BASEPATH="${OPENJK_BASEPATH:-/Users/joshabb/Library/Application Support/Steam/steamapps/common/Jedi Academy/SWJKJA.app/Contents}"
 HOMEPATH="${OPENJK_HOMEPATH:-/tmp/openjk_phase5_siege}"
 SIM="$ROOT/tests/splitscreen/external/macos_input_sim"
@@ -13,10 +14,10 @@ PORT="${OPENJK_VIRTUAL_GAMEPAD_PORT:-29207}"
 mkdir -p "$HOMEPATH/base/splitqa" "$(dirname "$LOG")" "$HOMEPATH/base/screenshots"
 "$ROOT/tests/splitscreen/install_assets.sh" "$HOMEPATH" >/dev/null
 cp "$ROOT/tests/splitscreen/phase5/four-player/siege.cfg" "$HOMEPATH/base/splitqa/phase5_siege.cfg"
-cp "$BUILD_DIR/codemp/ui/uiarm64.dylib" "$HOMEPATH/base/"
-for module in "$BUILD_DIR"/codemp/cgame/cgame*arm64.dylib; do cp "$module" "$HOMEPATH/base/"; done
-cp "$BUILD_DIR/codemp/game/jampgamearm64.dylib" "$HOMEPATH/base/"
-cp "$BUILD_DIR/codemp/rd-vanilla/rd-vanilla_arm64.dylib" "$(dirname "$BIN")/"
+cp "$BUILD_DIR/codemp/ui/ui${MODULE_ARCH}.dylib" "$HOMEPATH/base/"
+for module in "$BUILD_DIR"/codemp/cgame/cgame*"${MODULE_ARCH}".dylib; do cp "$module" "$HOMEPATH/base/"; done
+cp "$BUILD_DIR/codemp/game/jampgame${MODULE_ARCH}.dylib" "$HOMEPATH/base/"
+test -s "$(dirname "$BIN")/rd-vanilla_${MODULE_ARCH}.dylib"
 "$ROOT/tests/splitscreen/build_external_input_sim.sh" >/dev/null
 
 OPENJK_VIRTUAL_GAMEPADS=3 OPENJK_VIRTUAL_GAMEPAD_PORT="$PORT" "$BIN" \
@@ -56,6 +57,7 @@ fi
 [[ $(rg -c "SplitNetLifecycleAssert: PASS" "$LOG") -eq 8 ]]
 [[ $(rg -c "SplitNetStatAssert: PASS" "$LOG") -eq 4 ]]
 [[ $(rg -c "SplitInputAssertCmd: PASS" "$LOG") -eq 8 ]]
+[[ $(rg -c "godmode ON$" "$LOG") -eq 4 ]]
 test -s "$HOMEPATH/base/screenshots/phase5_siege_active.png"
 test -s "$HOMEPATH/base/screenshots/phase5_siege_input.png"
 echo "four-player Siege QA passed"

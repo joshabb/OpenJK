@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BUILD_DIR="${OPENJK_BUILD_DIR:-$ROOT/build-arm64-native}"
 BIN="${OPENJK_BIN:-$BUILD_DIR/openjk.arm64.app/Contents/MacOS/openjk.arm64}"
+MODULE_ARCH="${OPENJK_MODULE_ARCH:-arm64}"
 BASEPATH="${OPENJK_BASEPATH:-/Users/joshabb/Library/Application Support/Steam/steamapps/common/Jedi Academy/SWJKJA.app/Contents}"
 HOMEPATH="${OPENJK_HOMEPATH:-$ROOT/runtime-home}"
 SIM="$ROOT/tests/splitscreen/external/macos_input_sim"
@@ -14,11 +15,11 @@ PORT="${OPENJK_VIRTUAL_GAMEPAD_PORT:-29184}"
 mkdir -p "$CFG_DST" "$(dirname "$LOG")" "$HOMEPATH/base/screenshots"
 "$ROOT/tests/splitscreen/install_assets.sh" "$HOMEPATH" >/dev/null
 cp "$ROOT/tests/splitscreen/cfg/external_lifecycle_probe.cfg" "$CFG_DST/"
-cp "$BUILD_DIR/codemp/ui/uiarm64.dylib" "$HOMEPATH/base/"
-for cgame_module in "$BUILD_DIR"/codemp/cgame/cgame*arm64.dylib; do
+cp "$BUILD_DIR/codemp/ui/ui${MODULE_ARCH}.dylib" "$HOMEPATH/base/"
+for cgame_module in "$BUILD_DIR"/codemp/cgame/cgame*"${MODULE_ARCH}".dylib; do
 	cp "$cgame_module" "$HOMEPATH/base/"
 done
-cp "$BUILD_DIR/codemp/game/jampgamearm64.dylib" "$HOMEPATH/base/"
+cp "$BUILD_DIR/codemp/game/jampgame${MODULE_ARCH}.dylib" "$HOMEPATH/base/"
 "$ROOT/tests/splitscreen/build_external_input_sim.sh" >/dev/null
 
 OPENJK_VIRTUAL_GAMEPADS=3 OPENJK_VIRTUAL_GAMEPAD_PORT="$PORT" "$BIN" \

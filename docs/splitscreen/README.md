@@ -49,3 +49,10 @@ different servers.
 
 See [PLAYER-GUIDE.md](PLAYER-GUIDE.md) for controls and per-player menus, and
 [NETWORK-GUIDE.md](NETWORK-GUIDE.md) for hosting and vanilla servers.
+
+## End-to-End Hardening
+
+The phased, parallel gameplay and bug-closure plan is in
+[Split-Screen End-to-End Gameplay Hardening](../splitscreen-gameplay-hardening/README.md).
+It distinguishes spawn/input smoke tests from complete scoring, objective,
+death/respawn, intermission, restart, network-recovery, and clean-exit coverage.

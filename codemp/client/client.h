@@ -262,6 +262,7 @@ typedef struct splitScreenClient_s {
 	qboolean			cgameNeedsRestart;
 	int					player;
 	int					qport;
+	int					duplicateClientNumSince;
 	connstate_t			state;
 	char				servername[MAX_OSPATH];
 	clientActive_t		active;
@@ -533,6 +534,8 @@ void CL_SplitScreenSetControllerButton( int player, int button, qboolean pressed
 void CL_SplitNetSendCmds( void );
 
 void CL_WritePacket( void );
+void CL_SendPureChecksums( void );
+void CL_SendSplitPureChecksums( int player );
 
 float CL_KeyState (kbutton_t *key);
 const char *Key_KeynumToString( int keynum/*, qboolean bTranslate */ ); //note: translate is only called for menu display not configs
@@ -630,6 +633,9 @@ void CL_SplitCGameFrame( void );
 void CL_SplitNetNotifyGameState( void );
 qboolean CL_SplitNetSuppressAutomaticMenu( int player, int menuID );
 void CL_CGameKeyEventForPlayer( int player, int key, qboolean down );
+void CL_CGameConsoleCommandForPlayer( int player, const char *command );
+void Con_MessageModeForPlayer( int player, qboolean team );
+void CL_AddReliableCommandForPlayer( int player, const char *command );
 void CL_FirstSnapshot( void );
 void CL_ShaderStateChanged(void);
 

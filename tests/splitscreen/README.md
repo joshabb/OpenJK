@@ -58,6 +58,27 @@ The default suite covers:
   attack, jump/use buttons, and a local combat command stream.
 - Localhost split-network connection setup for players 2 through 4.
 
+## Public Internet acceptance
+
+The routed public runners drive the visible stock menus, per-player character
+and Force-profile screens, Favorites browser, and Join action before asserting
+independent network slots, live player state, and device-isolated gameplay:
+
+```sh
+tests/splitscreen/run_routed_public_acceptance.sh 2
+tests/splitscreen/run_routed_public_acceptance.sh 3
+tests/splitscreen/run_routed_public_acceptance.sh 4
+```
+
+All three player-count runners have passed against public Internet endpoints.
+The four-player run depends on a pre-cgame empty sequenced acknowledgement:
+that packet lets vanilla servers deliver secondary gamestates while still
+preserving pure-checksum-before-usermove ordering. The client also rejects
+placeholder snapshots that reuse another local player's server slot, so a
+same-IP policy rejection cannot be misreported as success. Dated screenshots,
+logs, server slots, and occupancy details are in
+`proof/public-internet-2026-07-22/README.md`.
+
 ## External input simulator
 
 The in-game QA configs are useful for deterministic assertions, but keyboard and

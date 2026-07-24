@@ -361,15 +361,50 @@ static int Key_SplitScreenPrimaryControllerPlayer( void )
 	return 1;
 }
 
+static int Key_SplitScreenKeyboardMousePlayer( void )
+{
+	char inputName[32];
+	int player;
+	int playerCount;
+
+	if ( !Cvar_VariableIntegerValue( "cl_splitScreen" ) ) {
+		return 0;
+	}
+
+	playerCount = Com_Clampi( 1, MAX_SPLITSCREEN_PLAYERS,
+		Cvar_VariableIntegerValue( "ui_splitScreenPlayerCount" ) );
+	for ( player = 1; player <= playerCount; player++ ) {
+		Cvar_VariableStringBuffer( va( "ui_splitScreenP%iInput", player ),
+			inputName, sizeof( inputName ) );
+		if ( !Q_stricmp( inputName, "keyboard" ) ) {
+			return player;
+		}
+	}
+
+	/* An unassigned keyboard/mouse must not silently fall back to another pane. */
+	return 0;
+}
+
+static void Key_ClaimSplitScreenKeyboardMouse( const char *device )
+{
+	const int player = Key_SplitScreenKeyboardMousePlayer();
+
+	Cvar_Set( "ui_splitScreenLastInputDevice", device );
+	Cvar_Set( "ui_splitScreenInputTarget", va( "%i", player ) );
+	if ( player > 0 ) {
+		Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
+	}
+}
+
 static qboolean Key_HandleSplitScreenConsoleChord( int key, qboolean down )
 {
 	static qboolean consoleChordDown = qfalse;
 
-	if ( !Cvar_VariableIntegerValue( "cl_splitScreen" ) || ( key != A_JOY6 && key != A_JOY7 ) ) {
+	if ( !Cvar_VariableIntegerValue( "cl_splitScreen" ) || ( key != A_JOY4 && key != A_JOY6 ) ) {
 		return qfalse;
 	}
 
-	if ( down && kg.keys[A_JOY6].down && kg.keys[A_JOY7].down ) {
+	if ( down && kg.keys[A_JOY4].down && kg.keys[A_JOY6].down ) {
 		if ( !consoleChordDown ) {
 			Con_ToggleConsoleForPlayer( Key_SplitScreenPrimaryControllerPlayer() );
 			consoleChordDown = qtrue;
@@ -1198,6 +1233,7 @@ In game talk message
 */
 void Message_Key( int key ) {
 	char buffer[MAX_STRING_CHARS] = {0};
+	const int player = Key_GetConsolePlayer();
 
 	if ( key == A_ESCAPE ) {
 		Key_SetCatcher( Key_GetCatcher() & ~KEYCATCH_MESSAGE );
@@ -1206,12 +1242,15 @@ void Message_Key( int key ) {
 	}
 
 	if ( key == A_ENTER || key == A_KP_ENTER ) {
-		if ( chatField.buffer[0] && cls.state == CA_ACTIVE ) {
+		const qboolean active = (qboolean)( player <= 1
+			? cls.state == CA_ACTIVE
+			: cl_splitClients[player].enabled && cl_splitClients[player].state == CA_ACTIVE );
+		if ( chatField.buffer[0] && active ) {
 				 if ( chat_playerNum != -1 )	Com_sprintf( buffer, sizeof( buffer ), "tell %i \"%s\"\n", chat_playerNum, chatField.buffer );
 			else if ( chat_team )				Com_sprintf( buffer, sizeof( buffer ), "say_team \"%s\"\n", chatField.buffer );
 			else								Com_sprintf( buffer, sizeof( buffer ), "say \"%s\"\n", chatField.buffer );
 
-			CL_AddReliableCommand( buffer, qfalse );
+			CL_AddReliableCommandForPlayer( player, buffer );
 		}
 		Key_SetCatcher( Key_GetCatcher() & ~KEYCATCH_MESSAGE );
 		Field_Clear( &chatField );
@@ -1763,15 +1802,22 @@ void CL_InitKeyCommands( void ) {
 			Cvar_Set( "ui_splitScreenLastInputDevice", device );
 			Cvar_Set( "ui_splitScreenDeviceEventPending", "1" );
 		} else {
-			Cvar_Set( "ui_splitScreenLastInputDevice", "keyboard" );
-			Cvar_Set( "ui_splitScreenInputTarget", "0" );
+			Key_ClaimSplitScreenKeyboardMouse( key >= A_MOUSE1 && key <= A_MOUSE5
+				? "mouse" : "keyboard" );
+			Cvar_Set( "ui_splitScreenDeviceEventPending", "0" );
 		}
 
 		Com_Printf( "SplitInputSim: key device=%s player=%i key=%i down=%i\n", device, player, key, down ? 1 : 0 );
 		if ( !Q_stricmpn( device, "controller", 10 ) ) {
 			CL_SplitScreenKeyEvent( player, key, down, 0 );
 		} else {
-			Sys_QueEvent( 0, SE_KEY, key, down, 0, NULL );
+			/*
+			 * This developer-only QA command runs while the command buffer is being
+			 * drained. Queuing through Sys_QueEvent made delivery depend on a later
+			 * event-loop pass, so scripted assertions could overtake the key event.
+			 * Dispatch keyboard input synchronously, matching the controller branch.
+			 */
+			CL_KeyEvent( key, down, 0 );
 		}
 	}, "Inject a device-scoped key event for split-screen UI/input QA" );
 	Cmd_AddCommand( "splitinput_mouse", [](){
@@ -1798,10 +1844,10 @@ void CL_InitKeyCommands( void ) {
 
 		dx = atoi( Cmd_Argv( 1 ) );
 		dy = atoi( Cmd_Argv( 2 ) );
-		Cvar_Set( "ui_splitScreenLastInputDevice", "mouse" );
-		Cvar_Set( "ui_splitScreenInputTarget", "0" );
+		Key_ClaimSplitScreenKeyboardMouse( "mouse" );
 		Com_Printf( "SplitInputSim: mouse device=mouse dx=%i dy=%i\n", dx, dy );
-		Sys_QueEvent( 0, SE_MOUSE, dx, dy, 0, NULL );
+		/* Keep scripted cursor motion ordered with scripted clicks/assertions. */
+		CL_MouseEvent( dx, dy, 0 );
 	}, "Inject a device-scoped mouse delta for split-screen UI/input QA" );
 }
 
@@ -1923,8 +1969,8 @@ void CL_KeyDownEvent( int key, unsigned time )
 		if ( Cvar_VariableIntegerValue( "ui_splitScreenDeviceEventPending" ) ) {
 			Cvar_Set( "ui_splitScreenDeviceEventPending", "0" );
 		} else {
-			Cvar_Set( "ui_splitScreenLastInputDevice", "keyboard" );
-			Cvar_Set( "ui_splitScreenInputTarget", "0" );
+			Key_ClaimSplitScreenKeyboardMouse( key >= A_MOUSE1 && key <= A_MOUSE5
+				? "mouse" : "keyboard" );
 		}
 	}
 
@@ -1933,6 +1979,13 @@ void CL_KeyDownEvent( int key, unsigned time )
 	if( kg.keys[keynames[key].upper].repeats == 1 ) {
 		kg.keyDownCount++;
 		kg.anykeydown = qtrue;
+	}
+
+	if ( Cvar_VariableIntegerValue( "cl_splitScreen" ) &&
+		( Key_GetCatcher() & ( KEYCATCH_CONSOLE | KEYCATCH_MESSAGE ) ) &&
+		Key_SplitScreenKeyboardMousePlayer() != Key_GetConsolePlayer() ) {
+		// Physical keyboard/mouse input cannot edit another device's modal.
+		return;
 	}
 
 	if ( cl_allowAltEnter->integer && kg.keys[A_ALT].down && key == A_ENTER )
@@ -2050,8 +2103,8 @@ void CL_KeyUpEvent( int key, unsigned time )
 		if ( Cvar_VariableIntegerValue( "ui_splitScreenDeviceEventPending" ) ) {
 			Cvar_Set( "ui_splitScreenDeviceEventPending", "0" );
 		} else {
-			Cvar_Set( "ui_splitScreenLastInputDevice", "keyboard" );
-			Cvar_Set( "ui_splitScreenInputTarget", "0" );
+			Key_ClaimSplitScreenKeyboardMouse( key >= A_MOUSE1 && key <= A_MOUSE5
+				? "mouse" : "keyboard" );
 		}
 	}
 
@@ -2120,7 +2173,21 @@ void CL_SplitScreenKeyEvent( int player, int key, qboolean down, unsigned time )
 
 	catcher = Key_GetCatcherForPlayer( player );
 	if ( ( catcher & KEYCATCH_CONSOLE ) && Key_GetConsolePlayer() == player ) {
-		CL_KeyEvent( key, down, time );
+		if ( down ) {
+			if ( key >= A_JOY0 && key <= A_JOY31 ) {
+				key = Key_TranslateSplitScreenMenuKey( key );
+			}
+			Console_Key( key );
+		}
+		return;
+	}
+	if ( ( catcher & KEYCATCH_MESSAGE ) && Key_GetConsolePlayer() == player ) {
+		if ( down ) {
+			if ( key >= A_JOY0 && key <= A_JOY31 ) {
+				key = Key_TranslateSplitScreenMenuKey( key );
+			}
+			Message_Key( key );
+		}
 		return;
 	}
 	if ( catcher & KEYCATCH_UI ) {
@@ -2148,6 +2215,11 @@ void CL_CharEvent( int key ) {
 	// delete is not a printable character and is otherwise handled by Field_KeyDownEvent
 	if ( key == 127 )
 		return;
+	if ( Cvar_VariableIntegerValue( "cl_splitScreen" ) &&
+		( Key_GetCatcher() & ( KEYCATCH_CONSOLE | KEYCATCH_MESSAGE ) ) &&
+		Key_SplitScreenKeyboardMousePlayer() != Key_GetConsolePlayer() ) {
+		return;
+	}
 
 	// distribute the key down event to the appropriate handler
 		 if ( Key_GetCatcher() & KEYCATCH_CONSOLE )		Field_CharEvent( &g_consoleField, key );

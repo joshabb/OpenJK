@@ -2467,8 +2467,6 @@ static void CG_ApplySplitScreenRect( int viewIndex ) {
 			cg.refdef.height = cgs.glconfig.vidHeight - halfHeight;
 		}
 
-		cg.refdef.width &= ~1;
-		cg.refdef.height &= ~1;
 		return;
 	}
 
@@ -2481,8 +2479,6 @@ static void CG_ApplySplitScreenRect( int viewIndex ) {
 		cg.refdef.width = ( viewIndex % 2 ) ? cgs.glconfig.vidWidth - halfWidth : halfWidth;
 		cg.refdef.height = ( viewIndex >= 2 ) ? cgs.glconfig.vidHeight - halfHeight : halfHeight;
 
-		cg.refdef.width &= ~1;
-		cg.refdef.height &= ~1;
 		return;
 	}
 
@@ -2502,8 +2498,6 @@ static void CG_ApplySplitScreenRect( int viewIndex ) {
 		cg.refdef.height = viewIndex == 0 ? topHeight : cgs.glconfig.vidHeight - topHeight;
 	}
 
-	cg.refdef.width &= ~1;
-	cg.refdef.height &= ~1;
 }
 
 void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demoPlayback ) {
@@ -2682,7 +2676,9 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 	CG_PredictPlayerState();
 
 	// decide on third person view
-	cg.renderingThirdPerson = cg_thirdPerson.integer || (cg.snap->ps.stats[STAT_HEALTH] <= 0);
+	cg.renderingThirdPerson =
+		( cg.splitThirdPersonOverride ? cg.splitThirdPerson : cg_thirdPerson.integer ) ||
+		(cg.snap->ps.stats[STAT_HEALTH] <= 0);
 
 	if (cg.snap->ps.stats[STAT_HEALTH] > 0)
 	{

@@ -54,6 +54,13 @@ static float ui_viewportTransformX = 0.0f;
 static float ui_viewportTransformY = 0.0f;
 static float ui_viewportTransformW = SCREEN_WIDTH;
 static float ui_viewportTransformH = SCREEN_HEIGHT;
+#define UI_VIEWPORT_STACK_DEPTH 8
+typedef struct uiViewportTransform_s {
+	qboolean active;
+	float x, y, w, h;
+} uiViewportTransform_t;
+static uiViewportTransform_t ui_viewportTransformStack[UI_VIEWPORT_STACK_DEPTH];
+static int ui_viewportTransformDepth;
 static qboolean ui_splitScreenPaintingProfiles = qfalse;
 static int ui_splitScreenTopCursor[5] = { -1, -1, -1, -1, -1 };
 
@@ -74,6 +81,35 @@ void UI_SetViewportTransform( qboolean active, float x, float y, float w, float 
 	ui_viewportTransformY = y;
 	ui_viewportTransformW = w;
 	ui_viewportTransformH = h;
+}
+
+void UI_PushViewportTransform( float x, float y, float w, float h )
+{
+	uiViewportTransform_t *saved;
+
+	if ( ui_viewportTransformDepth >= UI_VIEWPORT_STACK_DEPTH ) {
+		trap->Error( ERR_DROP, "UI viewport transform stack overflow" );
+		return;
+	}
+	saved = &ui_viewportTransformStack[ui_viewportTransformDepth++];
+	saved->active = ui_viewportTransformActive;
+	saved->x = ui_viewportTransformX;
+	saved->y = ui_viewportTransformY;
+	saved->w = ui_viewportTransformW;
+	saved->h = ui_viewportTransformH;
+	UI_SetViewportTransform( qtrue, x, y, w, h );
+}
+
+void UI_PopViewportTransform( void )
+{
+	uiViewportTransform_t *saved;
+
+	if ( ui_viewportTransformDepth <= 0 ) {
+		trap->Error( ERR_DROP, "UI viewport transform stack underflow" );
+		return;
+	}
+	saved = &ui_viewportTransformStack[--ui_viewportTransformDepth];
+	UI_SetViewportTransform( saved->active, saved->x, saved->y, saved->w, saved->h );
 }
 
 void UI_TransformRect( float *x, float *y, float *w, float *h )
@@ -116,6 +152,39 @@ void UI_TransformRect( float *x, float *y, float *w, float *h )
 	}
 }
 
+void UI_TransformPicRect( float *x, float *y, float *w, float *h, float *s1, float *t1, float *s2, float *t2 )
+{
+	float originalX, originalY, originalW, originalH;
+	float clippedX, clippedY, clippedW, clippedH;
+	float ds, dt;
+
+	if ( !ui_viewportTransformActive ) {
+		return;
+	}
+	originalX = ui_viewportTransformX + ( *x * ui_viewportTransformW / SCREEN_WIDTH );
+	originalY = ui_viewportTransformY + ( *y * ui_viewportTransformH / SCREEN_HEIGHT );
+	originalW = *w * ui_viewportTransformW / SCREEN_WIDTH;
+	originalH = *h * ui_viewportTransformH / SCREEN_HEIGHT;
+	clippedX = originalX;
+	clippedY = originalY;
+	clippedW = originalW;
+	clippedH = originalH;
+	UI_TransformRect( x, y, w, h );
+	if ( originalW == 0.0f || originalH == 0.0f || *w <= 0.0f || *h <= 0.0f ) {
+		return;
+	}
+	ds = *s2 - *s1;
+	dt = *t2 - *t1;
+	clippedX = *x - clippedX;
+	clippedY = *y - clippedY;
+	clippedW = ( originalX + originalW ) - ( *x + *w );
+	clippedH = ( originalY + originalH ) - ( *y + *h );
+	*s1 += ds * clippedX / originalW;
+	*t1 += dt * clippedY / originalH;
+	*s2 -= ds * clippedW / originalW;
+	*t2 -= dt * clippedH / originalH;
+}
+
 float UI_TransformScale( float scale )
 {
 	float xScale;
@@ -132,7 +201,10 @@ float UI_TransformScale( float scale )
 
 static void UI_DrawStretchPicTransformed( float x, float y, float w, float h, float s1, float t1, float s2, float t2, qhandle_t hShader )
 {
-	UI_TransformRect( &x, &y, &w, &h );
+	UI_TransformPicRect( &x, &y, &w, &h, &s1, &t1, &s2, &t2 );
+	if ( w <= 0.0f || h <= 0.0f ) {
+		return;
+	}
 	trap->R_DrawStretchPic( x, y, w, h, s1, t1, s2, t2, hShader );
 }
 
@@ -809,12 +881,49 @@ int Text_Height(const char *text, float scale, int iMenuFont)
 void Text_Paint(float x, float y, float scale, vec4_t color, const char *text, float adjust, int limit, int style, int iMenuFont)
 {
 	int iStyleOR = 0;
+	int textLength;
+	int pixelBudget;
+	char budgetText[MAX_STRING_CHARS];
 
 	int iFontIndex = MenuFontToHandle(iMenuFont);
 	float w = 0.0f;
 	float h = 0.0f;
 	UI_TransformRect( &x, &y, &w, &h );
 	scale = UI_TransformScale( scale );
+	textLength = strlen( text );
+	if ( limit > 0 && limit < textLength ) {
+		textLength = limit;
+	}
+	if ( textLength >= (int)sizeof( budgetText ) ) {
+		textLength = sizeof( budgetText ) - 1;
+	}
+	memcpy( budgetText, text, textLength );
+	budgetText[textLength] = '\0';
+	pixelBudget = trap->R_Font_StrLenPixels( budgetText, iFontIndex, scale );
+	if ( ui_viewportTransformActive ) {
+		float availableWidth;
+		float fontHeight;
+
+		if ( x < ui_viewportTransformX || x >= ui_viewportTransformX + ui_viewportTransformW ) {
+			return;
+		}
+		fontHeight = trap->R_Font_HeightPixels( iFontIndex, scale );
+		if ( y <= ui_viewportTransformY || y - fontHeight >= ui_viewportTransformY + ui_viewportTransformH ) {
+			return;
+		}
+		/* Reserve the font renderer's drop-shadow fringe at the pane edge. */
+		availableWidth = ui_viewportTransformX + ui_viewportTransformW - x - ( style == ITEM_TEXTSTYLE_NORMAL ? 0.0f : 2.0f );
+		if ( availableWidth <= 0.0f ) {
+			return;
+		}
+		while ( textLength > 0 && pixelBudget > availableWidth ) {
+			budgetText[--textLength] = '\0';
+			pixelBudget = trap->R_Font_StrLenPixels( budgetText, iFontIndex, scale );
+		}
+		if ( textLength <= 0 ) {
+			return;
+		}
+	}
 	//
 	// kludge.. convert JK2 menu styles to SOF2 printstring ctrl codes...
 	//
@@ -834,7 +943,7 @@ void Text_Paint(float x, float y, float scale, vec4_t color, const char *text, f
 							text,	// const char *text
 							color,	// paletteRGBA_c c
 							iStyleOR | iFontIndex,	// const int iFontHandle
-							!limit?-1:limit,		// iCharLimit (-1 = none)
+							pixelBudget,	// renderer limit is a pixel-width budget
 							scale	// const float scale = 1.0f
 							);
 }
@@ -6113,7 +6222,7 @@ static void UI_QueueSplitScreenNetworkJoins( const char *serverAddress )
 	}
 	trap->Cvar_Set( "cl_splitScreenPartyTarget", serverAddress );
 	trap->Cvar_Set( "ui_splitScreenPartyState", "connecting" );
-	trap->Cmd_ExecuteText( EXEC_APPEND, va( "splitnet_party_connect %s\n", serverAddress ) );
+	trap->Cmd_ExecuteText( EXEC_INSERT, va( "splitnet_party_connect %s\n", serverAddress ) );
 }
 
 static void UI_JoinServer( void )
@@ -6126,8 +6235,8 @@ static void UI_JoinServer( void )
 	if (uiInfo.serverStatus.currentServer >= 0 && uiInfo.serverStatus.currentServer < uiInfo.serverStatus.numDisplayServers)
 	{
 		trap->LAN_GetServerAddressString(UI_SourceForLAN()/*ui_netSource.integer*/, uiInfo.serverStatus.displayServers[uiInfo.serverStatus.currentServer], buff, sizeof( buff ) );
-		trap->Cmd_ExecuteText( EXEC_APPEND, va( "connect %s\n", buff ) );
 		UI_QueueSplitScreenNetworkJoins( buff );
+		trap->Cmd_ExecuteText( EXEC_INSERT, va( "connect %s\n", buff ) );
 	}
 
 }
@@ -6668,6 +6777,65 @@ static void UI_RefreshSplitScreenInputMenu( void )
 	}
 }
 
+static void UI_RefreshSplitScreenPlayerCountMenu( void )
+{
+	menuDef_t *menu = Menus_FindByName( "splitscreen_start" );
+	int playerCount;
+	int buttonPlayer;
+	char itemName[32];
+
+	if ( !menu )
+	{
+		return;
+	}
+
+	/*
+	 * The menu can be activated again while handling a mouse action.  Its old
+	 * onOpen script unconditionally wrote "2", so selecting 3 or 4 could leave
+	 * the button highlighted while silently reverting the cvar and subsequent
+	 * setup layout to two players.  Treat the cvar as the source of truth and
+	 * rebuild the visible selection from it instead of resetting it.
+	 */
+	playerCount = Com_Clamp( 2, 4,
+		(int)trap->Cvar_VariableValue( "ui_splitScreenPlayerCount" ) );
+	trap->Cvar_Set( "ui_splitScreenPlayerCount", va( "%i", playerCount ) );
+	Menu_SetItemText( menu, "currentplayers",
+		va( "SELECTED: %i PLAYERS", playerCount ) );
+
+	for ( buttonPlayer = 2; buttonPlayer <= 4; buttonPlayer++ )
+	{
+		Com_sprintf( itemName, sizeof( itemName ), "players%i", buttonPlayer );
+		UI_SplitScreenSetButtonColor( menu, itemName, buttonPlayer == playerCount );
+	}
+}
+
+static void UI_RefreshSplitScreenSessionTypeMenu( void )
+{
+	menuDef_t *menu = Menus_FindByName( "splitscreen_start" );
+	char sessionType[32] = {0};
+	qboolean serverParty;
+
+	if ( !menu )
+	{
+		return;
+	}
+
+	trap->Cvar_VariableStringBuffer( "ui_splitScreenSessionType", sessionType, sizeof( sessionType ) );
+	serverParty = (qboolean)!Q_stricmp( sessionType, "server" );
+	if ( !serverParty && Q_stricmp( sessionType, "local" ) )
+	{
+		Q_strncpyz( sessionType, "local", sizeof( sessionType ) );
+		trap->Cvar_Set( "ui_splitScreenSessionType", sessionType );
+	}
+
+	UI_SplitScreenSetButtonColor( menu, "typelocal", !serverParty );
+	UI_SplitScreenSetButtonColor( menu, "typeparty", serverParty );
+	Menu_SetItemText( menu, "partytext",
+		serverParty
+			? "Begin opens the server browser with split-screen enabled."
+			: "Begin starts a local split-screen match." );
+}
+
 static void UI_StartSplitScreenServer( void )
 {
 	char sessionType[32] = {0};
@@ -6691,6 +6859,17 @@ static void UI_StartSplitScreenServer( void )
 		}
 	}
 	UI_CopySplitScreenP1ProfileToGameCvars();
+
+	/*
+	 * Player setup is a split-composited overlay.  Once the party hands off to
+	 * a stock full-screen browser/create-server menu, leaving setup mode active
+	 * causes UI_Refresh to paint the player panes over the newly opened menu and
+	 * route its clicks back into those hidden panes.
+	 */
+	trap->Cvar_Set( "ui_splitScreenConfiguring", "0" );
+	trap->Cvar_Set( "ui_splitScreenMenuMode", "" );
+	trap->Cvar_Set( "ui_splitScreenPendingSetup", "0" );
+	trap->Cvar_Set( "ui_splitScreenInputTarget", "0" );
 
 	if ( !Q_stricmp( sessionType, "server" ) ) {
 		trap->Cvar_Set( "ui_splitScreenPartyState", "join_pending" );
@@ -6912,6 +7091,36 @@ static void UI_RunMenuScript(char **args)
 				}
 			} else if (Q_stricmp(name, "RefreshSplitScreenInputs") == 0) {
 				UI_RefreshSplitScreenInputMenu();
+			} else if (Q_stricmp(name, "RefreshSplitScreenPlayerCount") == 0) {
+				UI_RefreshSplitScreenPlayerCountMenu();
+			} else if (Q_stricmp(name, "RefreshSplitScreenSessionType") == 0) {
+				UI_RefreshSplitScreenSessionTypeMenu();
+			} else if (Q_stricmp(name, "SplitScreenSelectPlayerCount") == 0) {
+				int playerCount;
+
+				if ( Int_Parse( args, &playerCount ) ) {
+					playerCount = Com_Clamp( 2, 4, playerCount );
+					trap->Cvar_Set( "ui_splitScreenPlayerCount", va( "%i", playerCount ) );
+					UI_RefreshSplitScreenPlayerCountMenu();
+					trap->Print( va( "SplitScreen player count selected: %i\n", playerCount ) );
+				}
+			} else if (Q_stricmp(name, "SplitScreenSelectSessionType") == 0) {
+				const char *sessionType;
+
+				if ( String_Parse( args, &sessionType ) &&
+						( !Q_stricmp( sessionType, "local" ) || !Q_stricmp( sessionType, "server" ) ) ) {
+					trap->Cvar_Set( "ui_splitScreenSessionType", sessionType );
+					UI_RefreshSplitScreenSessionTypeMenu();
+					trap->Print( va( "SplitScreen session type selected: %s\n", sessionType ) );
+				}
+			} else if (Q_stricmp(name, "SplitScreenBeginSetup") == 0) {
+				trap->Cvar_Set( "ui_splitScreenConfiguring", "1" );
+				trap->Cvar_Set( "ui_splitScreenMenuMode", "setup" );
+				trap->Cvar_Set( "ui_splitScreenPendingSetup", "1" );
+				trap->Cvar_Set( "ui_splitScreenProfileTarget", "1" );
+				trap->Cvar_Set( "ui_splitScreenInputTarget", "1" );
+				trap->Cvar_Set( "ui_splitScreenLastInputDevice", "keyboard" );
+				UI_LoadSplitScreenPlayerProfile( 1 );
 			} else if (Q_stricmp(name, "SplitScreenLoadProfile") == 0) {
 				int player;
 
@@ -7045,8 +7254,8 @@ static void UI_RunMenuScript(char **args)
 		else if (Q_stricmp(name, "FoundPlayerJoinServer") == 0) {
 			trap->Cvar_Set("ui_singlePlayerActive", "0");
 			if (uiInfo.currentFoundPlayerServer >= 0 && uiInfo.currentFoundPlayerServer < uiInfo.numFoundPlayerServers) {
-				trap->Cmd_ExecuteText( EXEC_APPEND, va( "connect %s\n", uiInfo.foundPlayerServerAddresses[uiInfo.currentFoundPlayerServer] ) );
 				UI_QueueSplitScreenNetworkJoins( uiInfo.foundPlayerServerAddresses[uiInfo.currentFoundPlayerServer] );
+				trap->Cmd_ExecuteText( EXEC_INSERT, va( "connect %s\n", uiInfo.foundPlayerServerAddresses[uiInfo.currentFoundPlayerServer] ) );
 			}
 		} else if (Q_stricmp(name, "Quit") == 0) {
 			trap->Cvar_Set("ui_singlePlayerActive", "0");
@@ -11467,7 +11676,7 @@ static void UI_PaintSplitScreenKeyboard( void )
 	}
 
 	UI_SplitScreenSetupMenuViewport( ui_splitKeyboard.player, UI_SplitScreenSetupPlayerCount(), &viewportX, &viewportY, &viewportW, &viewportH );
-	UI_SetViewportTransform( qtrue, viewportX, viewportY, viewportW, viewportH );
+	UI_PushViewportTransform( viewportX, viewportY, viewportW, viewportH );
 
 	panelX = 46.0f;
 	panelY = 76.0f;
@@ -11523,7 +11732,7 @@ static void UI_PaintSplitScreenKeyboard( void )
 		}
 	}
 
-	UI_SetViewportTransform( qfalse, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT );
+	UI_PopViewportTransform();
 }
 
 static void UI_UpdateSplitScreenKeyboardTrigger( void )
@@ -11639,6 +11848,43 @@ static int UI_SplitScreenPlayerForInputDevice( const char *deviceName )
 	}
 
 	return 0;
+}
+
+static void UI_ClampSplitScreenMouseCursor( qboolean claimOwnership )
+{
+	int mouseOwner;
+	float viewportX;
+	float viewportY;
+	float viewportW;
+	float viewportH;
+
+	if ( !( UI_SplitScreenPlayerSetupVisible() || UI_SplitScreenIngameVisible() ||
+			UI_SplitScreenModeVisible( "stock" ) || UI_SplitScreenModeVisible( "controls" ) ) ) {
+		return;
+	}
+
+	mouseOwner = UI_SplitScreenPlayerForInputDevice( "keyboard" );
+	if ( mouseOwner < 1 || mouseOwner > UI_SplitScreenSetupPlayerCount() ) {
+		return;
+	}
+
+	UI_SplitScreenSetupViewport( mouseOwner, UI_SplitScreenSetupPlayerCount(),
+		&viewportX, &viewportY, &viewportW, &viewportH );
+	/* Cursor artwork is 40x40 and uses its upper-left as the hotspot. */
+	uiInfo.uiDC.cursorx = (int)Com_Clamp( viewportX, viewportX + viewportW - 40.0f,
+		(float)uiInfo.uiDC.cursorx );
+	uiInfo.uiDC.cursory = (int)Com_Clamp( viewportY, viewportY + viewportH - 40.0f,
+		(float)uiInfo.uiDC.cursory );
+
+	if ( claimOwnership ) {
+		trap->Cvar_Set( "ui_splitScreenInputTarget", va( "%i", mouseOwner ) );
+		trap->Cvar_Set( "ui_splitScreenLastInputDevice", "mouse" );
+	}
+
+	/* Deterministic input-isolation telemetry for the split-screen QA harness. */
+	trap->Cvar_Set( "ui_splitScreenMouseOwner", va( "%i", mouseOwner ) );
+	trap->Cvar_Set( "ui_splitScreenMouseCursorX", va( "%i", uiInfo.uiDC.cursorx ) );
+	trap->Cvar_Set( "ui_splitScreenMouseCursorY", va( "%i", uiInfo.uiDC.cursory ) );
 }
 
 static int UI_SplitScreenInputTargetPlayer( void )
@@ -11973,21 +12219,38 @@ static void UI_HideSplitScreenIngameSubmenus( void )
 static void UI_SaveSplitScreenPlayerProfile( int player )
 {
 	char model[MAX_QPATH] = {0};
+	int modelIndex;
 
 	trap->Cvar_Set( "ui_splitScreenConfiguring", "1" );
 	trap->Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", player ) );
 	trap->Cvar_Set( va( "ui_splitScreenP%iName", player ), UI_Cvar_VariableString( "ui_Name" ) );
 	trap->Cvar_Set( va( "ui_splitScreenP%iForcePowers", player ), UI_Cvar_VariableString( "forcepowers" ) );
-	UI_UpdateCharacterCvars();
+	modelIndex = (int)trap->Cvar_VariableValue( "ui_selectedModelIndex" );
+	// Stock portrait selection writes the per-player model directly.  Rebuilding
+	// it from the custom-character cvars here would replace that selection with
+	// whichever player's custom parts were painted most recently.
+	if ( modelIndex < 0 ) {
+		UI_UpdateCharacterCvars();
+	}
 	Q_strncpyz( model, UI_Cvar_VariableString( va( "ui_splitScreenP%iModel", player ) ), sizeof( model ) );
-	trap->Cvar_Set( va( "ui_splitScreenP%iModelIndex", player ), UI_Cvar_VariableString( "ui_selectedModelIndex" ) );
+	trap->Cvar_Set( va( "ui_splitScreenP%iModelIndex", player ), va( "%i", modelIndex ) );
 	trap->Cvar_Set( va( "ui_splitScreenP%iModelIndexModel", player ), model );
 	UI_UpdateSaberCvars();
 }
 
 static void UI_PrepareSplitScreenStockPlayerMenu( menuDef_t *menu )
 {
-	(void)menu;
+	/*
+	 * The stock player menu owns several mutually exclusive groups (Apply vs
+	 * Join Game, team buttons, Force Disabled vs the normal Force controls).
+	 * Their visibility is global menu state, while the split compositor swaps
+	 * ui_myteam and force settings once per pane. Recompute those groups after
+	 * loading each profile so state from the previously painted player cannot
+	 * be drawn on top of the current player's controls.
+	 */
+	if ( menu ) {
+		UpdateForceStatus();
+	}
 }
 
 static void UI_PaintSplitScreenPlayerSetup( void )
@@ -12029,9 +12292,9 @@ static void UI_PaintSplitScreenPlayerSetup( void )
 		UI_ApplySplitScreenPlayerModelSelection( menu, player );
 
 		UI_SplitScreenSetupMenuViewport( player, playerCount, &viewportX, &viewportY, &viewportW, &viewportH );
-		UI_SetViewportTransform( qtrue, viewportX, viewportY, viewportW, viewportH );
+		UI_PushViewportTransform( viewportX, viewportY, viewportW, viewportH );
 		Menu_Paint( menu, qtrue );
-		UI_SetViewportTransform( qfalse, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT );
+		UI_PopViewportTransform();
 	}
 	ui_splitScreenPaintingProfiles = qfalse;
 
@@ -12076,8 +12339,17 @@ static void UI_PaintSplitScreenIngameMenus( void )
 		float viewportW;
 		float viewportH;
 
+		/*
+		 * A top-level menu is a modal owned by one input target.  Painting the
+		 * shared menu definition for every player duplicated its full-screen
+		 * background/top bar into every pane even though only activeTarget
+		 * could operate it.
+		 */
+		if ( player != activeTarget ) {
+			continue;
+		}
 		UI_SplitScreenSetupMenuViewport( player, playerCount, &viewportX, &viewportY, &viewportW, &viewportH );
-		UI_SetViewportTransform( qtrue, viewportX, viewportY, viewportW, viewportH );
+		UI_PushViewportTransform( viewportX, viewportY, viewportW, viewportH );
 		UI_LoadSplitScreenTopCursor( ingameMenu, player );
 		{
 			itemDef_t *focused = UI_SplitScreenFocusedItem( ingameMenu );
@@ -12085,7 +12357,7 @@ static void UI_PaintSplitScreenIngameMenus( void )
 				focused && focused->window.name ? focused->window.name : "" );
 		}
 		Menu_Paint( ingameMenu, qtrue );
-		UI_SetViewportTransform( qfalse, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT );
+		UI_PopViewportTransform();
 	}
 	UI_LoadSplitScreenTopCursor( ingameMenu, activeTarget );
 
@@ -12179,18 +12451,18 @@ static void UI_PaintSplitScreenStockMenu( const char *menuName )
 
 		UI_LoadSplitScreenPlayerProfile( player );
 		UI_SplitScreenSetupMenuViewport( player, playerCount, &viewportX, &viewportY, &viewportW, &viewportH );
-		UI_SetViewportTransform( qtrue, viewportX, viewportY, viewportW, viewportH );
+		UI_PushViewportTransform( viewportX, viewportY, viewportW, viewportH );
 		if ( player == activeTarget ) {
 			UI_FillRect( 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, black );
 		}
-		if ( ingameMenu ) {
+		if ( ingameMenu && player == activeTarget ) {
 			UI_LoadSplitScreenTopCursor( ingameMenu, player );
 			Menu_Paint( ingameMenu, qtrue );
 		}
 		if ( player == activeTarget ) {
 			Menu_Paint( menu, qtrue );
 		}
-		UI_SetViewportTransform( qfalse, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT );
+		UI_PopViewportTransform();
 	}
 
 	trap->Cvar_Set( "ui_splitScreenProfileTarget", va( "%i", activeTarget ) );
@@ -12250,6 +12522,23 @@ static int UI_SplitScreenControllerBindIndexForCommand( const char *command )
 	return -1;
 }
 
+static qboolean UI_SplitScreenCommandIsButtonBindable( const char *command )
+{
+	static const char *nonButtonCommands[] = {
+		"sensitivity", "ui_mousePitch", "movesideaxis", "moveforwardaxis",
+		"lookyawaxis", "lookpitchaxis", "cl_run", "cg_autoswitch",
+		"+mlook", "voicechat"
+	};
+	int i;
+
+	for ( i = 0; i < (int)ARRAY_LEN( nonButtonCommands ); i++ ) {
+		if ( !Q_stricmp( command, nonButtonCommands[i] ) ) {
+			return qfalse;
+		}
+	}
+	return qtrue;
+}
+
 static qboolean UI_SplitScreenPlayerUsesController( int player )
 {
 	char inputName[64] = {0};
@@ -12273,6 +12562,13 @@ static qboolean UI_CaptureSplitScreenControllerBind( int player, int key )
 	bindIndex = UI_SplitScreenControllerBindIndexForCommand( command );
 	if ( bindIndex < 0 ) {
 		return qfalse;
+	}
+	if ( !UI_SplitScreenCommandIsButtonBindable( command ) ) {
+		trap->Cvar_Set( "ui_splitScreenControlsCapturedBind",
+			va( "%s cannot be assigned to a split controller button", command ) );
+		trap->Cvar_Set( "ui_splitScreenControlsAwaitingGamepad", "0" );
+		Display_ClearKeyBindPending();
+		return qtrue;
 	}
 
 	button = key - A_JOY0;
@@ -12327,10 +12623,10 @@ static void UI_PaintSplitScreenControlsMenu( void )
 	}
 
 	UI_SplitScreenSetupMenuViewport( player, playerCount, &viewportX, &viewportY, &viewportW, &viewportH );
-	UI_SetViewportTransform( qtrue, viewportX, viewportY, viewportW, viewportH );
+	UI_PushViewportTransform( viewportX, viewportY, viewportW, viewportH );
 	trap->Cvar_Set( "ui_splitScreenControlsPaintPlayer", va( "%i", player ) );
 	Menu_Paint( menu, qtrue );
-	UI_SetViewportTransform( qfalse, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT );
+	UI_PopViewportTransform();
 	trap->Cvar_Set( "ui_splitScreenControlsPaintPlayer", "0" );
 
 	UI_FillRect( 0, SCREEN_HEIGHT / 2.0f - 1.0f, SCREEN_WIDTH, 2, divider );
@@ -12545,11 +12841,6 @@ static qboolean UI_HandleSplitScreenPlayerSetupKey( int key, qboolean down )
 		( key == A_CURSOR_LEFT || key == A_CURSOR_RIGHT || key == A_CURSOR_UP || key == A_CURSOR_DOWN ||
 		  key == A_ENTER || key == A_KP_ENTER || key == A_BACKSPACE ) );
 
-	if ( !controllerNavigation && ( key == A_ENTER || key == A_KP_ENTER ) ) {
-		UI_StartSplitScreenServer();
-		return qtrue;
-	}
-
 	if ( controllerNavigation ) {
 		menuX = 220;
 		menuY = 185;
@@ -12557,6 +12848,11 @@ static qboolean UI_HandleSplitScreenPlayerSetupKey( int key, qboolean down )
 	UI_LoadSplitScreenPlayerProfile( player );
 	menu = UI_SplitScreenSetupMenuForPlayer( player, player );
 	if ( !menu ) {
+		return qtrue;
+	}
+	if ( !controllerNavigation && ( key == A_ENTER || key == A_KP_ENTER ) &&
+		menu == Menus_FindByName( "ingame_player" ) ) {
+		UI_StartSplitScreenServer();
 		return qtrue;
 	}
 	trap->Cvar_Set( "ui_splitScreenConfiguring", "1" );
@@ -12642,10 +12938,10 @@ static qboolean UI_HandleSplitScreenPlayerSetupKey( int key, qboolean down )
 		}
 	}
 
-	if ( controllerNavigation && menu == Menus_FindByName( "ingame_player" ) &&
+	if ( menu == Menus_FindByName( "ingame_player" ) &&
 		( key == A_CURSOR_LEFT || key == A_CURSOR_RIGHT || key == A_CURSOR_UP || key == A_CURSOR_DOWN ) ) {
 		itemDef_t *focused = UI_SplitScreenFocusedItem( menu );
-		if ( focused && focused->window.name && !Q_stricmpn( focused->window.name, "apply", 5 ) ) {
+		if ( controllerNavigation && focused && focused->window.name && !Q_stricmpn( focused->window.name, "apply", 5 ) ) {
 			UI_MoveSplitScreenControlsFocus( menu, key, qfalse );
 			return qtrue;
 		}
@@ -13171,6 +13467,15 @@ static qboolean UI_HandleSplitScreenIngameKey( int key, qboolean down )
 	return qtrue;
 }
 
+static qboolean UI_SplitScreenSetupActivatorHeld( void )
+{
+	if ( trap->Key_IsDown( A_MOUSE1 ) || trap->Key_IsDown( A_ENTER ) ||
+		 trap->Key_IsDown( A_KP_ENTER ) ) {
+		return qtrue;
+	}
+	return qfalse;
+}
+
 void UI_Refresh( int realtime )
 {
 	static int index;
@@ -13204,6 +13509,36 @@ void UI_Refresh( int realtime )
 
 	UI_UpdateCvars();
 	UI_UpdateSplitScreenKeyboardTrigger();
+	/*
+	 * The cursor can already be outside its owner's viewport when split-screen
+	 * turns on (for example, NEXT sits in the future P3 quadrant).  Clamp every
+	 * split-menu paint as well as mouse-motion events so that stale coordinates
+	 * never flash in another player's pane.  This does not claim focus away
+	 * from a controller; only an actual mouse event does that.
+	 */
+	UI_ClampSplitScreenMouseCursor( qfalse );
+
+	/*
+	 * Enabling split rendering while NEXT is still active invalidates the menu
+	 * transition.  Wait for the activating control to be released, then queue
+	 * the renderer switch outside this UI refresh.  The wrapper has already
+	 * opened the stock player menu and selected setup mode by this point.
+	 */
+	if ( trap->Cvar_VariableValue( "ui_splitScreenPendingSetup" ) &&
+		 !UI_SplitScreenSetupActivatorHeld() ) {
+		trap->Cvar_Set( "ui_splitScreenPendingSetup", "0" );
+		trap->Cmd_ExecuteText( EXEC_INSERT,
+			"set in_joystick 1\n"
+			"set cl_splitScreen 1\n"
+			"set ui_splitScreenConfiguring 1\n"
+			"set ui_splitScreenProfileTarget 1\n"
+			"set ui_splitScreenInputTarget 1\n"
+			"set ui_splitScreenLastInputDevice keyboard\n"
+			"set ui_splitScreenMenuMode setup\n"
+			"wait 30\n" );
+		/* The queued switch is consumed after this refresh finishes. */
+		return;
+	}
 
 	if ( UI_SplitScreenModeVisible( "join" ) ) {
 		trap->Cvar_Set( "ui_splitScreenLastPaint", "join" );
@@ -13419,6 +13754,15 @@ void UI_MouseEvent( int dx, int dy )
 		uiInfo.uiDC.cursory = 0;
 	else if (uiInfo.uiDC.cursory > SCREEN_HEIGHT)
 		uiInfo.uiDC.cursory = SCREEN_HEIGHT;
+
+	/*
+	 * A mouse is an assigned split-screen device, not a way to choose a pane.
+	 * Keep its logical cursor inside the viewport owned by the keyboard/mouse
+	 * player.  Without this clamp a large relative motion could visibly cross
+	 * into another player's setup pane even though key routing still belonged
+	 * to the original player.
+	 */
+	UI_ClampSplitScreenMouseCursor( qtrue );
 
 	if ( UI_SplitScreenModeVisible( "join" ) ) {
 		UI_UpdateSplitScreenActionRowFromCursor( "join" );

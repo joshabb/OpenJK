@@ -9,11 +9,10 @@
 
 		onOpen
 		{
-			setcvar				"ui_splitScreenConfiguring" "1" ;
-			setcvar				"ui_splitScreenMenuMode" "setup" ;
-			setcvar				"ui_splitScreenProfileTarget" "1" ;
-			uiScript			SplitScreenLoadProfile 1 ;
+			uiScript			SplitScreenBeginSetup ;
 			uiScript			getsaberhiltinfo ;
+			close				splitscreen_players ;
+			open				ingame_player ;
 		}
 
 		onClose

@@ -8,7 +8,8 @@ import zlib
 
 
 def read_png(path):
-    data = open(path, "rb").read()
+    with open(path, "rb") as image_file:
+        data = image_file.read()
     if data[:8] != b"\x89PNG\r\n\x1a\n":
         raise ValueError("not a PNG")
 

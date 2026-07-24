@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BUILD_DIR="${OPENJK_BUILD_DIR:-$ROOT/build-arm64-native}"
 BIN="${OPENJK_BIN:-$BUILD_DIR/openjk.arm64.app/Contents/MacOS/openjk.arm64}"
+ARCH_SUFFIX="${OPENJK_ARCH_SUFFIX:-arm64}"
 BASEPATH="${OPENJK_BASEPATH:-/Users/joshabb/Library/Application Support/Steam/steamapps/common/Jedi Academy/SWJKJA.app/Contents}"
 HOMEPATH="${OPENJK_HOMEPATH:-$ROOT/runtime-home}"
 CFG_SRC="$ROOT/tests/splitscreen/cfg"
@@ -27,6 +28,9 @@ DEFAULT_TESTS=(
 	ui_console_keyboard
 	controller_bind
 	input_routing_sim
+	input_isolation_2p
+	input_isolation_3p
+	input_isolation_4p
 	gameplay_input_sim
 	controls_force_combat_sim
 	splitnet_localhost
@@ -50,11 +54,11 @@ fi
 mkdir -p "$CFG_DST" "$LOG_DIR" "$HOMEPATH/base/screenshots"
 "$ROOT/tests/splitscreen/install_assets.sh" "$HOMEPATH" >/dev/null
 cp "$CFG_SRC"/*.cfg "$CFG_DST"/
-cp "$BUILD_DIR/codemp/ui/uiarm64.dylib" "$HOMEPATH/base/"
-for cgame_module in "$BUILD_DIR"/codemp/cgame/cgame*arm64.dylib; do
+cp "$BUILD_DIR/codemp/ui/ui${ARCH_SUFFIX}.dylib" "$HOMEPATH/base/"
+for cgame_module in "$BUILD_DIR"/codemp/cgame/cgame*"${ARCH_SUFFIX}".dylib; do
 	cp "$cgame_module" "$HOMEPATH/base/"
 done
-cp "$BUILD_DIR/codemp/game/jampgamearm64.dylib" "$HOMEPATH/base/"
+cp "$BUILD_DIR/codemp/game/jampgame${ARCH_SUFFIX}.dylib" "$HOMEPATH/base/"
 
 FAILURES=0
 for test_name in "${TESTS[@]}"; do
@@ -171,6 +175,15 @@ for test_name in "${TESTS[@]}"; do
 			;;
 		input_routing_sim)
 			required_patterns=("SplitInputRoute: keyboardOwner=1 controller1Owner=2" "SplitInputAssert after_controller" "SplitInputAssert after_keyboard" "SplitInputAssert after_mouse" "SplitInputSim: key device=controller1 player=2" "SplitInputSim: key device=keyboard player=1" "SplitInputSim: mouse device=mouse" "SplitInputAssertModel: PASS player=1" "SplitInputAssertModel: PASS player=2")
+			;;
+		input_isolation_2p)
+			required_patterns=("SplitInputRoute: keyboardOwner=1 controller1Owner=2" "InputIsolationAssert ui_controller_p2_only" "InputIsolationAssert ui_keyboard_p1_only" "InputIsolationAssert mouse_clamped_to_p1" "SplitUIAssert: PASS cvar=ui_splitScreenMouseOwner expected=1 actual=1" "SplitUIAssert: PASS cvar=ui_splitScreenMouseCursorX expected=600 actual=600" "SplitUIAssert: PASS cvar=ui_splitScreenMouseCursorY expected=200 actual=200" "InputIsolationAssert gameplay_keyboard_p1_only" "InputIsolationAssert gameplay_mouse_not_p2" "InputIsolationAssert gameplay_controller1_p2_only" "SplitInputAssertCmd: PASS player=2 expectedForward=127" "SplitInputAssertCmd: PASS player=2 .*expectedButtons=1 actualButtons=1")
+			;;
+		input_isolation_3p)
+			required_patterns=("SplitInputRoute: keyboardOwner=1 controller1Owner=2 controller2Owner=3" "InputIsolation3Assert ui_controller1_p2_only" "InputIsolation3Assert ui_controller2_p3_only" "InputIsolation3Assert ui_keyboard_p1_only" "InputIsolation3Assert mouse_clamped_to_p1" "SplitUIAssert: PASS cvar=ui_splitScreenMouseOwner expected=1 actual=1" "SplitUIAssert: PASS cvar=ui_splitScreenMouseCursorX expected=600 actual=600" "SplitUIAssert: PASS cvar=ui_splitScreenMouseCursorY expected=200 actual=200" "InputIsolation3Assert gameplay_keyboard_p1_only" "InputIsolation3Assert gameplay_mouse_not_p2_or_p3" "InputIsolation3Assert gameplay_controller1_p2_only" "InputIsolation3Assert gameplay_controller2_p3_only" "SplitInputAssertCmd: PASS player=2 expectedForward=127" "SplitInputAssertCmd: PASS player=3 expectedForward=0 actualForward=0 expectedRight=-80 actualRight=-80" "SplitInputAssertCmd: PASS player=3 .*expectedButtons=1 actualButtons=1")
+			;;
+		input_isolation_4p)
+			required_patterns=("SplitInputRoute: keyboardOwner=1 controller1Owner=2 controller2Owner=3 controller3Owner=4" "InputIsolation4Assert ui_controller1_p2_only" "InputIsolation4Assert ui_controller2_p3_only" "InputIsolation4Assert ui_controller3_p4_only" "InputIsolation4Assert ui_keyboard_p1_only" "InputIsolation4Assert mouse_clamped_to_p1" "SplitUIAssert: PASS cvar=ui_splitScreenMouseOwner expected=1 actual=1" "SplitUIAssert: PASS cvar=ui_splitScreenMouseCursorX expected=280 actual=280" "SplitUIAssert: PASS cvar=ui_splitScreenMouseCursorY expected=200 actual=200" "InputIsolation4Assert gameplay_keyboard_p1_only" "InputIsolation4Assert gameplay_mouse_not_p2_p3_or_p4" "InputIsolation4Assert gameplay_controller1_p2_only" "InputIsolation4Assert gameplay_controller2_p3_only" "InputIsolation4Assert gameplay_controller3_p4_only" "SplitInputAssertCmd: PASS player=2 expectedForward=127" "SplitInputAssertCmd: PASS player=3 expectedForward=0 actualForward=0 expectedRight=-80 actualRight=-80" "SplitInputAssertCmd: PASS player=4 expectedForward=96" "SplitInputAssertCmd: PASS player=4 .*expectedButtons=1 actualButtons=1")
 			;;
 		gameplay_input_sim)
 			required_patterns=("SplitNetLifecycleAssert: PASS player=2 expected=ALIVE actual=ALIVE" "SplitNetLifecycleAssert: PASS player=3 expected=ALIVE actual=ALIVE" "SplitNetLifecycleAssert: PASS player=4 expected=ALIVE actual=ALIVE" "SplitGameplayAssert keyboard_forward" "SplitGameplayAssert controller1_forward" "SplitGameplayAssert controller2_strafe" "SplitGameplayAssert controller3_altattack" "SplitGameplayAssert mouse_no_controller_bleed" "SplitGameplayAssert swapped_device_ownership" "SplitInputSim: axis device=controller1 player=2 axis=1 value=-127" "SplitInputRoute: keyboardOwner=2 controller1Owner=1 controller2Owner=3 controller3Owner=4" "SplitInputSim: axis device=controller2 player=3 axis=0 value=-80" "SplitInputSim: button device=controller3 player=4 button=1 pressed=1" "SplitInputAssertCmd: PASS player=4")

@@ -1023,6 +1023,10 @@ Ghoul2 Insert End
 #endif
 
 	qboolean spawning;
+	qboolean splitDrawRadarOverride;
+	qboolean splitDrawRadar;
+	qboolean splitThirdPersonOverride;
+	qboolean splitThirdPerson;
 	int	numSpawnVars;
 	char *spawnVars[MAX_SPAWN_VARS][2];	// key / value pairs
 	int numSpawnVarChars;
@@ -1747,6 +1751,11 @@ void CG_DrawTopBottom(float x, float y, float w, float h, float size);
 void CG_Set2DViewportTransform( qboolean active, float x, float y, float w, float h );
 void CG_Transform2DRect( float *x, float *y, float *w, float *h );
 float CG_Transform2DScale( float scale );
+float CG_Transform2DWidth( float width );
+float CG_Transform2DHeight( float height );
+qboolean CG_2DViewportTransformActive( void );
+void CG_DrawPicUV( float x, float y, float width, float height,
+	float s1, float t1, float s2, float t2, qhandle_t hShader );
 
 //
 // cg_draw.c, cg_newDraw.c

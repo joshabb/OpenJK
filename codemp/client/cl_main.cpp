@@ -173,8 +173,11 @@ static void CL_SplitNetLoadContext( int player, clientActive_t *savedCl, clientC
 static void CL_SplitNetRestorePrimaryContext( const clientActive_t *savedCl, const clientConnection_t *savedClc );
 
 static qboolean cl_splitPartySetupQueued;
+static int cl_splitNextPartyConnectTime;
 static char cl_splitPendingCommand[MAX_SPLITSCREEN_PLAYERS + 1][MAX_STRING_CHARS];
 static int cl_splitSuppressAutomaticMenuUntil[MAX_SPLITSCREEN_PLAYERS + 1];
+static int cl_splitPrimaryDisconnectTime;
+static char cl_splitPrimaryReconnectServer[MAX_OSPATH];
 
 qboolean CL_SplitNetSuppressAutomaticMenu( int player, int menuID )
 {
@@ -842,6 +845,21 @@ void CL_Disconnect( qboolean showMainMenu ) {
 	}
 
 	Cvar_VariableStringBuffer( "ui_splitScreenPartyState", splitPartyState, sizeof( splitPartyState ) );
+	if ( cls.state >= CA_CONNECTED &&
+		( !Q_stricmp( splitPartyState, "active" ) ||
+		  !Q_stricmp( splitPartyState, "partial" ) ||
+		  !Q_stricmp( splitPartyState, "failed" ) ) ) {
+		/*
+		 * A controlled split party tears down several server slots at once.
+		 * Remember the primary endpoint so an immediate whole-party reconnect
+		 * can observe the server's normal reconnect/zombie grace period.  A
+		 * same-qport reconnect during that window can receive fragments from
+		 * the retiring slot and fail with an illegible server message.
+		 */
+		cl_splitPrimaryDisconnectTime = Sys_Milliseconds();
+		Q_strncpyz( cl_splitPrimaryReconnectServer, cls.servername,
+			sizeof( cl_splitPrimaryReconnectServer ) );
+	}
 	CL_SplitNetDisconnectAll();
 	if ( Q_stricmp( splitPartyState, "connecting" ) ) {
 		Cvar_Set( "ui_splitScreenPartyState", "disconnected" );
@@ -1086,17 +1104,10 @@ static netsrc_t CL_SplitNetSourceForPlayer( int player )
 	}
 }
 
-static void CL_SplitNetBuildUserinfo( int player, char *info, int infoSize )
+static void CL_SplitNetOverlayProfileUserinfo( int player, char *info )
 {
-	int qport = ( (int)Cvar_VariableValue( "net_qport" ) + player - 1 ) & 0xffff;
 	char value[MAX_INFO_VALUE];
 
-	Q_strncpyz( info, Cvar_InfoString( CVAR_USERINFO ), infoSize );
-	Info_SetValueForKey( info, "protocol", va( "%i", PROTOCOL_VERSION ) );
-	Info_SetValueForKey( info, "qport", va( "%i", qport ) );
-	// Vanilla servers preserve unknown userinfo keys, allowing local QA and
-	// compatible servers to identify party members without a protocol change.
-	Info_SetValueForKey( info, "splitplayer", va( "%i", player ) );
 	Cvar_VariableStringBuffer( va( "ui_splitScreenP%iName", player ), value, sizeof( value ) );
 	if ( value[0] ) {
 		Info_SetValueForKey( info, "name", value );
@@ -1137,6 +1148,19 @@ static void CL_SplitNetBuildUserinfo( int player, char *info, int infoSize )
 	if ( value[0] ) {
 		Info_SetValueForKey( info, "forcepowers", value );
 	}
+}
+
+static void CL_SplitNetBuildUserinfo( int player, char *info, int infoSize )
+{
+	int qport = ( (int)Cvar_VariableValue( "net_qport" ) + player - 1 ) & 0xffff;
+
+	Q_strncpyz( info, Cvar_InfoString( CVAR_USERINFO ), infoSize );
+	Info_SetValueForKey( info, "protocol", va( "%i", PROTOCOL_VERSION ) );
+	Info_SetValueForKey( info, "qport", va( "%i", qport ) );
+	// Vanilla servers preserve unknown userinfo keys, allowing local QA and
+	// compatible servers to identify party members without a protocol change.
+	Info_SetValueForKey( info, "splitplayer", va( "%i", player ) );
+	CL_SplitNetOverlayProfileUserinfo( player, info );
 	Info_SetValueForKey( info, "challenge", va( "%i", cl_splitClients[player].connection.challenge ) );
 }
 
@@ -1160,6 +1184,15 @@ static qboolean CL_SplitNetAddReliableCommand( int player, const char *cmd )
 	return qtrue;
 }
 
+void CL_AddReliableCommandForPlayer( int player, const char *command )
+{
+	if ( player <= 1 ) {
+		CL_AddReliableCommand( command, qfalse );
+		return;
+	}
+	CL_SplitNetAddReliableCommand( player, command );
+}
+
 static void CL_SplitNetSetStatus( int player, const char *status, const char *message )
 {
 	Cvar_Set( va( "cl_splitScreenP%iNetStatus", player ), status ? status : "" );
@@ -1168,10 +1201,32 @@ static void CL_SplitNetSetStatus( int player, const char *status, const char *me
 	}
 }
 
+static void CL_SplitNetBuildReliableCommand( int firstArg, char *command, int commandSize )
+{
+	int i;
+
+	command[0] = '\0';
+	for ( i = firstArg; i < Cmd_Argc(); i++ ) {
+		const char *arg = Cmd_Argv( i );
+		const qboolean quote =
+			( !arg[0] || strpbrk( arg, " \t" ) != NULL ) ? qtrue : qfalse;
+
+		if ( i > firstArg ) {
+			Q_strcat( command, commandSize, " " );
+		}
+		if ( quote ) {
+			Q_strcat( command, commandSize, "\"" );
+		}
+		Q_strcat( command, commandSize, arg );
+		if ( quote ) {
+			Q_strcat( command, commandSize, "\"" );
+		}
+	}
+}
+
 static void CL_SplitNetReliableCommand_f( void )
 {
 	char command[MAX_STRING_CHARS];
-	char *rawCommand;
 	int player;
 
 	if ( Cmd_Argc() < 3 ) {
@@ -1180,12 +1235,15 @@ static void CL_SplitNetReliableCommand_f( void )
 	}
 
 	player = atoi( Cmd_Argv( 1 ) );
-	rawCommand = Com_SkipTokens( Cmd_Cmd(), 2, " \t" );
-	if ( rawCommand == Cmd_Cmd() || !rawCommand[0] ) {
+	// Cmd_ArgsFromBuffer flattens quoted argv tokens. That changes commands such
+	// as `siegeclass "Rocket Trooper"` into three server arguments, so only P1
+	// can select stock multi-word Siege classes. Re-quote tokens containing
+	// whitespace before sending the reliable command for P2-P4.
+	CL_SplitNetBuildReliableCommand( 2, command, sizeof( command ) );
+	if ( !command[0] ) {
 		Com_Printf( "usage: splitnet_cmd <player 2-4> <server command>\n" );
 		return;
 	}
-	Q_strncpyz( command, rawCommand, sizeof( command ) );
 	CL_SplitNetAddReliableCommand( player, command );
 }
 
@@ -1270,6 +1328,8 @@ static void CL_SplitNetConnect_f( void )
 static void CL_SplitNetDisconnectPlayer( int player )
 {
 	splitScreenClient_t *split;
+	clientActive_t *savedCl;
+	clientConnection_t *savedClc;
 	char oldStatus[32];
 
 	player = CL_SplitNetClampPlayer( player );
@@ -1281,7 +1341,21 @@ static void CL_SplitNetDisconnectPlayer( int player )
 		CL_ShutdownSplitCGame( player );
 	}
 	if ( split->state >= CA_CONNECTED ) {
-		NET_OutOfBandPrint( CL_SplitNetSourceForPlayer( player ), &split->connection.serverAddress, "disconnect" );
+		// Servers intentionally ignore connectionless "disconnect" packets.
+		// Send the normal reliable client command on this player's netchan so
+		// the slot is released immediately instead of lingering until timeout.
+		// These contexts are large; keep them off the shutdown call stack.
+		savedCl = new clientActive_t;
+		savedClc = new clientConnection_t;
+		CL_SplitNetLoadContext( player, savedCl, savedClc );
+		CL_AddReliableCommand( "disconnect", qtrue );
+		CL_WritePacket();
+		CL_WritePacket();
+		CL_WritePacket();
+		CL_SplitNetRestorePrimaryContext( savedCl, savedClc );
+		delete savedClc;
+		delete savedCl;
+		Com_Printf( "SplitNet P%i: sent reliable disconnect\n", player );
 	}
 	Cvar_Set( va( "ui_splitScreenP%iJoined", player ), "0" );
 	Cvar_Set( va( "cl_splitScreenP%iClientNum", player ), "-1" );
@@ -1379,6 +1453,13 @@ static void CL_SplitNetPartyConnect_f( void )
 	Cvar_Set( "ui_splitScreenPartyState", "connecting" );
 	Cvar_Set( "ui_splitScreenPartyError", "" );
 	cl_splitPartySetupQueued = qfalse;
+	/*
+	 * Stock servers apply sv_reconnectlimit to clients that share both an IP
+	 * address and UDP source port. All local party netchans use this process'
+	 * one socket, so simultaneous secondary handshakes can be mistaken for a
+	 * too-fast reconnect even though their qports differ.
+	 */
+	cl_splitNextPartyConnectTime = cls.realtime + 3500;
 	Com_Printf( "SplitNet party: waiting for primary client at %s\n", Cmd_Argv( 1 ) );
 }
 
@@ -1403,13 +1484,13 @@ static void CL_SplitNetPartyRetry_f( void )
 	Cvar_Set( "ui_splitScreenPartyState", "connecting" );
 	Cvar_Set( "ui_splitScreenPartyError", "" );
 	cl_splitPartySetupQueued = qfalse;
+	cl_splitNextPartyConnectTime = cls.realtime;
 }
 
 static void CL_SplitNetRejoin_f( void )
 {
 	char command[MAX_STRING_CHARS];
 	char target[MAX_OSPATH];
-	char *rawCommand;
 	int player;
 
 	if ( Cmd_Argc() < 3 ) {
@@ -1417,12 +1498,11 @@ static void CL_SplitNetRejoin_f( void )
 		return;
 	}
 	player = CL_SplitNetClampPlayer( atoi( Cmd_Argv( 1 ) ) );
-	rawCommand = Com_SkipTokens( Cmd_Cmd(), 2, " \t" );
-	if ( rawCommand == Cmd_Cmd() || !rawCommand[0] ) {
+	CL_SplitNetBuildReliableCommand( 2, command, sizeof( command ) );
+	if ( !command[0] ) {
 		Com_Printf( "usage: splitnet_rejoin <player 2-4> <server command>\n" );
 		return;
 	}
-	Q_strncpyz( command, rawCommand, sizeof( command ) );
 	if ( cl_splitClients[player].enabled && cl_splitClients[player].state >= CA_CONNECTED ) {
 		CL_SplitNetAddReliableCommand( player, command );
 		return;
@@ -1454,7 +1534,8 @@ static void CL_SplitNetPartyFrame( void )
 		return;
 	}
 	Cvar_VariableStringBuffer( "ui_splitScreenPartyState", partyState, sizeof( partyState ) );
-	if ( Q_stricmp( partyState, "connecting" ) && Q_stricmp( partyState, "active" ) ) {
+	if ( Q_stricmp( partyState, "connecting" ) && Q_stricmp( partyState, "active" ) &&
+		Q_stricmp( partyState, "failed" ) ) {
 		return;
 	}
 	playerCount = Com_Clamp( 2, MAX_SPLITSCREEN_PLAYERS,
@@ -1462,22 +1543,64 @@ static void CL_SplitNetPartyFrame( void )
 
 	for ( player = 2; player <= playerCount; player++ ) {
 		char status[32];
+		int previousPlayer;
+		qboolean playerActive;
+
 		Cvar_VariableStringBuffer( va( "cl_splitScreenP%iNetStatus", player ), status, sizeof( status ) );
-		if ( !Q_stricmp( status, "failed" ) ) {
-			Cvar_Set( "ui_splitScreenPartyState", "failed" );
-			Cvar_Set( "ui_splitScreenPartyError", va( "Player %i failed to connect", player ) );
-			Com_Printf( "SplitNet party: Player %i failed; healthy clients remain connected\n", player );
-			return;
-		}
-		if ( cl_splitClients[player].enabled && cl_splitClients[player].state == CA_ACTIVE &&
-			cl_splitClients[player].active.snap.valid ) {
+		playerActive = (qboolean)( cl_splitClients[player].enabled &&
+			cl_splitClients[player].state == CA_ACTIVE &&
+			cl_splitClients[player].active.snap.valid );
+		if ( playerActive ) {
+			splitScreenClient_t *split = &cl_splitClients[player];
+			qboolean duplicateClientNum = (qboolean)( split->connection.clientNum == clc.clientNum );
+
+			for ( previousPlayer = 2; !duplicateClientNum && previousPlayer < player; previousPlayer++ ) {
+				const splitScreenClient_t *previous = &cl_splitClients[previousPlayer];
+				duplicateClientNum = (qboolean)( previous->enabled &&
+					previous->state == CA_ACTIVE &&
+					previous->active.snap.valid &&
+					previous->connection.clientNum == split->connection.clientNum );
+			}
+			if ( duplicateClientNum ) {
+				const char *message = "Server did not assign a unique player slot (same-IP connection limit)";
+
+				if ( !split->duplicateClientNumSince ) {
+					split->duplicateClientNumSince = cls.realtime ? cls.realtime : 1;
+					continue;
+				}
+				// A newly primed client can receive one placeholder snapshot
+				// before ClientBegin assigns its real slot. Only reject a
+				// collision that remains stable beyond that transition.
+				if ( cls.realtime - split->duplicateClientNumSince < 5000 ) {
+					continue;
+				}
+				CL_SplitNetSetStatus( player, "failed", message );
+				Cvar_Set( va( "cl_splitScreenP%iNetError", player ), message );
+				Cvar_Set( "ui_splitScreenPartyState", "failed" );
+				Cvar_Set( "ui_splitScreenPartyError", message );
+				Com_Printf( "SplitNet party: Player %i reused server clientNum %i; rejecting placeholder connection\n",
+					player, split->connection.clientNum );
+				CL_SplitNetDisconnectPlayer( player );
+				return;
+			}
+			split->duplicateClientNumSince = 0;
 			activeCount++;
+			continue;
+		}
+		if ( !Q_stricmp( status, "failed" ) ) {
+			if ( Q_stricmp( partyState, "failed" ) ) {
+				Cvar_Set( "ui_splitScreenPartyState", "failed" );
+				Cvar_Set( "ui_splitScreenPartyError", va( "Player %i failed to connect", player ) );
+				Com_Printf( "SplitNet party: Player %i failed; healthy clients remain connected\n", player );
+			}
+			return;
 		}
 	}
 
 	if ( activeCount == playerCount ) {
 		if ( Q_stricmp( partyState, "active" ) ) {
 			Cvar_Set( "ui_splitScreenPartyState", "active" );
+			Cvar_Set( "ui_splitScreenPartyError", "" );
 			Cvar_Set( "ui_splitScreenHostPending", "0" );
 			Com_Printf( "SplitNet party: all %i local players active\n", playerCount );
 		}
@@ -1507,7 +1630,29 @@ static void CL_SplitNetPartyFrame( void )
 
 	for ( player = 2; player <= playerCount; player++ ) {
 		if ( !cl_splitClients[player].enabled ) {
+			int previousPlayer;
+
+			/*
+			 * Start only one missing secondary at a time, and do not start the
+			 * next until every lower-numbered slot is authoritative. The
+			 * additional spacing clears the stock server's three-second
+			 * reconnect guard for the shared source port.
+			 */
+			for ( previousPlayer = 2; previousPlayer < player; previousPlayer++ ) {
+				const splitScreenClient_t *previous = &cl_splitClients[previousPlayer];
+				if ( !previous->enabled || previous->state != CA_ACTIVE ||
+					!previous->active.snap.valid ) {
+					return;
+				}
+			}
+			if ( cls.realtime < cl_splitNextPartyConnectTime ) {
+				return;
+			}
 			CL_SplitNetBeginConnect( player, target );
+			cl_splitNextPartyConnectTime = cls.realtime + 3500;
+			Com_Printf( "SplitNet party: staggered Player %i handshake; next slot after %i ms\n",
+				player, cl_splitNextPartyConnectTime );
+			return;
 		}
 	}
 }
@@ -1693,7 +1838,9 @@ static void CL_SplitNetAssertLifecycle_f( void )
 		return;
 	}
 	health = ps->stats[STAT_HEALTH];
-	if ( ps->persistant[PERS_TEAM] == TEAM_SPECTATOR || ps->pm_type == PM_SPECTATOR ||
+	if ( ps->pm_type == PM_INTERMISSION || ps->pm_type == PM_SPINTERMISSION ) {
+		actual = "INTERMISSION";
+	} else if ( ps->persistant[PERS_TEAM] == TEAM_SPECTATOR || ps->pm_type == PM_SPECTATOR ||
 		( ps->pm_flags & PMF_FOLLOW ) ) {
 		actual = "SPECTATOR";
 	} else if ( health <= 0 || ps->pm_type == PM_DEAD ) {
@@ -1745,6 +1892,11 @@ CL_Connect_f
 void CL_Connect_f( void ) {
 	char	*server;
 	const char	*serverString;
+	char	splitPartyState[32];
+	netadr_t reconnectAddress;
+	netadr_t requestedAddress;
+	int reconnectElapsed;
+	qboolean reconnectsRetiringParty = qfalse;
 
 	if ( Cmd_Argc() != 2 ) {
 		Com_Printf( "usage: connect [server]\n");
@@ -1756,13 +1908,46 @@ void CL_Connect_f( void ) {
 
 	Cvar_Set("ui_singlePlayerActive", "0");
 
+	server = Cmd_Argv (1);
+
+	/*
+	 * The server keeps a just-disconnected slot around briefly. Reusing the
+	 * primary qport before that grace period expires can make the new netchan
+	 * consume fragments queued for the retiring slot. Keep the command buffer
+	 * ordered and retry in short frame chunks until three real seconds have
+	 * elapsed; this affects only a whole split-party reconnect to the endpoint
+	 * that was just torn down.
+	 */
+	Cvar_VariableStringBuffer( "ui_splitScreenPartyState", splitPartyState,
+		sizeof( splitPartyState ) );
+	reconnectElapsed = Sys_Milliseconds() - cl_splitPrimaryDisconnectTime;
+	if ( cl_splitPrimaryDisconnectTime > 0 &&
+		!Q_stricmp( splitPartyState, "connecting" ) &&
+		reconnectElapsed >= 0 && reconnectElapsed < 3000 ) {
+		if ( !Q_stricmp( server, cl_splitPrimaryReconnectServer ) ) {
+			reconnectsRetiringParty = qtrue;
+		} else if ( CL_SplitNetResolvePartyTarget( server, &requestedAddress ) &&
+			CL_SplitNetResolvePartyTarget( cl_splitPrimaryReconnectServer, &reconnectAddress ) &&
+			CL_SplitNetSameServer( &requestedAddress, &reconnectAddress ) ) {
+			reconnectsRetiringParty = qtrue;
+		}
+	}
+	if ( reconnectsRetiringParty ) {
+		Com_Printf( "SplitNet party: deferring primary reconnect for retiring server slot (%i ms remain)\n",
+			3000 - reconnectElapsed );
+		Cbuf_ExecuteText( EXEC_INSERT, va( "wait 60\nconnect %s", server ) );
+		return;
+	}
+	if ( cl_splitPrimaryDisconnectTime > 0 && reconnectElapsed >= 3000 ) {
+		cl_splitPrimaryDisconnectTime = 0;
+		cl_splitPrimaryReconnectServer[0] = '\0';
+	}
+
 	// fire a message off to the motd server
 	CL_RequestMotd();
 
 	// clear any previous "server full" type messages
 	clc.serverMessage[0] = 0;
-
-	server = Cmd_Argv (1);
 
 	if ( com_sv_running->integer && !strcmp( server, "localhost" ) ) {
 		// if running a local server, kill it
@@ -1888,13 +2073,35 @@ void CL_Rcon_f( void ) {
 CL_SendPureChecksums
 =================
 */
+static char cl_primaryPureChecksums[MAX_INFO_VALUE];
+
 void CL_SendPureChecksums( void ) {
 	char cMsg[MAX_INFO_VALUE];
 
 	// if we are pure we need to send back a command with our referenced pk3 checksums
 	Com_sprintf(cMsg, sizeof(cMsg), "cp %s", FS_ReferencedPakPureChecksums());
+	Q_strncpyz( cl_primaryPureChecksums, cMsg, sizeof( cl_primaryPureChecksums ) );
+	Com_DPrintf( "PureChecksums P1: clientNum=%i feed=%i command=%s\n",
+		clc.clientNum, clc.checksumFeed, cMsg );
 
 	CL_AddReliableCommand( cMsg, qfalse );
+}
+
+void CL_SendSplitPureChecksums( int player ) {
+	char cMsg[MAX_INFO_VALUE];
+
+	if ( cl_primaryPureChecksums[0] ) {
+		Q_strncpyz( cMsg, cl_primaryPureChecksums, sizeof( cMsg ) );
+	} else {
+		// Party attachment normally happens after the primary reaches PRIMED
+		// and caches its accepted command. Keep a safe fallback for unusual
+		// direct split-client connection flows.
+		Com_sprintf( cMsg, sizeof( cMsg ), "cp %s", FS_ReferencedPakPureChecksums() );
+	}
+	Com_DPrintf( "PureChecksums P%i: clientNum=%i feed=%i command=%s\n",
+		player, clc.clientNum, clc.checksumFeed, cMsg );
+	CL_AddReliableCommand( cMsg, qfalse );
+	Com_Printf( "SplitNet P%i: sent primary pure checksums\n", player );
 }
 
 /*
@@ -2431,6 +2638,21 @@ qboolean CL_SplitNetConnectionlessPacket( netsrc_t source, const netadr_t *from,
 
 			Q_strncpyz( translated, serverText, sizeof( translated ) );
 			Q_strncpyz( split->connection.serverMessage, translated, sizeof( split->connection.serverMessage ) );
+			/*
+			 * Every local split client shares the process UDP source port.
+			 * Stock servers therefore apply sv_reconnectlimit even when the
+			 * qports identify distinct players. Some public servers raise that
+			 * limit above the stock three seconds. This response is transient:
+			 * leave the client in CA_CHALLENGING so the normal bounded connect
+			 * retry loop can resend after RETRANSMIT_TIMEOUT.
+			 */
+			if ( split->state == CA_CHALLENGING &&
+				Q_stristr( translated, "Reconnect rejected : too soon" ) ) {
+				split->connection.connectTime = cls.realtime;
+				CL_SplitNetSetStatus( player, "challenging", translated );
+				Com_Printf( "SplitNet P%i server reconnect guard; retrying: %s", player, translated );
+				return qtrue;
+			}
 			Cvar_Set( va( "cl_splitScreenP%iNetError", player ), translated );
 			CL_SplitNetSetStatus( player, "failed", translated );
 			Com_Printf( "SplitNet P%i server: %s", player, translated );
@@ -3151,10 +3373,32 @@ void CL_CheckUserinfo( void ) {
 	if ( CL_CheckPaused() ) {
 		return;
 	}
+	/*
+	 * The split setup compositor paints each stock player-profile panel by
+	 * loading that player's values into the stock preview cvars.  Those
+	 * temporary swaps must not become Player 1 network updates.  The final P1
+	 * values remain dirty and are sent once the overlay closes; P2-P4 use the
+	 * explicit splitnet_applyprofile path.
+	 */
+	if ( Cvar_VariableIntegerValue( "cl_splitScreen" ) &&
+		Cvar_VariableIntegerValue( "ui_splitScreenConfiguring" ) ) {
+		return;
+	}
 	// send a reliable userinfo update if needed
 	if ( cvar_modifiedFlags & CVAR_USERINFO ) {
+		char info[MAX_INFO_STRING];
+
 		cvar_modifiedFlags &= ~CVAR_USERINFO;
-		CL_AddReliableCommand( va("userinfo \"%s\"", Cvar_InfoString( CVAR_USERINFO ) ), qfalse );
+		Q_strncpyz( info, Cvar_InfoString( CVAR_USERINFO ), sizeof( info ) );
+		if ( Cvar_VariableIntegerValue( "cl_splitScreen" ) ) {
+			/*
+			 * The shared stock preview cvars may still contain the last panel
+			 * painted when setup closes.  P1's persisted split profile is the
+			 * authoritative source for its connection userinfo.
+			 */
+			CL_SplitNetOverlayProfileUserinfo( 1, info );
+		}
+		CL_AddReliableCommand( va("userinfo \"%s\"", info ), qfalse );
 	}
 
 }

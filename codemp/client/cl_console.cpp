@@ -66,16 +66,14 @@ void Con_ToggleConsoleForPlayer( int player ) {
 	qboolean consoleOpen;
 
 	// closing a full screen console restarts the demo loop
-	if ( cls.state == CA_DISCONNECTED && Key_GetCatcher( ) == KEYCATCH_CONSOLE ) {
+	if ( player <= 1 && cls.state == CA_DISCONNECTED && Key_GetCatcher( ) == KEYCATCH_CONSOLE ) {
 		CL_StartDemoLoop();
 		return;
 	}
 
 	consoleOpen = (qboolean)( Key_GetCatcher( ) & KEYCATCH_CONSOLE );
 	if ( consoleOpen && Key_GetConsolePlayer() != player ) {
-		Key_SetConsolePlayer( player );
-		g_consoleField.widthInChars = g_console_field_width;
-		Con_ClearNotify ();
+		// An already-open console belongs exclusively to its opening device.
 		return;
 	}
 
@@ -175,12 +173,7 @@ Con_MessageMode_f
 ================
 */
 void Con_MessageMode_f (void) {	//yell
-	chat_playerNum = -1;
-	chat_team = qfalse;
-	Field_Clear( &chatField );
-	chatField.widthInChars = 30;
-
-	Key_SetCatcher( Key_GetCatcher( ) ^ KEYCATCH_MESSAGE );
+	Con_MessageModeForPlayer( 1, qfalse );
 }
 
 /*
@@ -189,11 +182,20 @@ Con_MessageMode2_f
 ================
 */
 void Con_MessageMode2_f (void) {	//team chat
+	Con_MessageModeForPlayer( 1, qtrue );
+}
+
+void Con_MessageModeForPlayer( int player, qboolean team ) {
+	if ( ( Key_GetCatcher() & KEYCATCH_MESSAGE ) && Key_GetConsolePlayer() != player ) {
+		// Another local device must not steal or close the active chat field.
+		return;
+	}
+	Key_SetConsolePlayer( player );
 	chat_playerNum = -1;
-	chat_team = qtrue;
+	chat_team = team;
 	Field_Clear( &chatField );
-	chatField.widthInChars = 25;
-	Key_SetCatcher( Key_GetCatcher( ) ^ KEYCATCH_MESSAGE );
+	chatField.widthInChars = team ? 25 : 30;
+	Key_SetCatcher( Key_GetCatcher() ^ KEYCATCH_MESSAGE );
 }
 
 /*
@@ -203,17 +205,23 @@ Con_MessageMode3_f
 */
 void Con_MessageMode3_f (void)
 {		//target chat
+	if ( ( Key_GetCatcher() & KEYCATCH_MESSAGE ) && Key_GetConsolePlayer() != 1 ) {
+		// A primary target-chat bind must not steal another local player's chat.
+		return;
+	}
 	if (!cls.cgameStarted)
 	{
 		assert(!"null cgvm");
 		return;
 	}
 
+	CGVM_SelectPlayer( 1 );
 	chat_playerNum = CGVM_CrosshairPlayer();
 	if ( chat_playerNum < 0 || chat_playerNum >= MAX_CLIENTS ) {
 		chat_playerNum = -1;
 		return;
 	}
+	Key_SetConsolePlayer( 1 );
 	chat_team = qfalse;
 	Field_Clear( &chatField );
 	chatField.widthInChars = 30;
@@ -227,17 +235,23 @@ Con_MessageMode4_f
 */
 void Con_MessageMode4_f (void)
 {	//attacker
+	if ( ( Key_GetCatcher() & KEYCATCH_MESSAGE ) && Key_GetConsolePlayer() != 1 ) {
+		// A primary attacker-chat bind must not steal another local player's chat.
+		return;
+	}
 	if (!cls.cgameStarted)
 	{
 		assert(!"null cgvm");
 		return;
 	}
 
+	CGVM_SelectPlayer( 1 );
 	chat_playerNum = CGVM_LastAttacker();
 	if ( chat_playerNum < 0 || chat_playerNum >= MAX_CLIENTS ) {
 		chat_playerNum = -1;
 		return;
 	}
+	Key_SetConsolePlayer( 1 );
 	chat_team = qfalse;
 	Field_Clear( &chatField );
 	chatField.widthInChars = 30;
@@ -919,6 +933,8 @@ void Con_DrawNotify (void)
 	// draw the chat line
 	if ( Key_GetCatcher( ) & KEYCATCH_MESSAGE )
 	{
+		const vec4_t chatBackdrop = { 0.10f, 0.16f, 0.42f, 0.95f };
+		SCR_FillRect( 0, v - 4, 320, BIGCHAR_HEIGHT + 12, chatBackdrop );
 		if (chat_team)
 		{
 			chattext = SE_GetString("MP_SVGAME", "SAY_TEAM");
@@ -1108,7 +1124,8 @@ void Con_DrawConsole( void ) {
 	Con_CheckResize ();
 
 	// if disconnected, render console full screen
-	if ( cls.state == CA_DISCONNECTED ) {
+	if ( cls.state == CA_DISCONNECTED &&
+		( !Cvar_VariableIntegerValue( "cl_splitScreen" ) || Key_GetConsolePlayer() <= 1 ) ) {
 		if ( !( Key_GetCatcher( ) & (KEYCATCH_UI | KEYCATCH_CGAME)) ) {
 			Con_DrawSolidConsole( 1.0 );
 			return;
@@ -1126,8 +1143,21 @@ void Con_DrawConsole( void ) {
 		}
 	} else {
 		// draw notify lines
-		if ( cls.state == CA_ACTIVE ) {
+		const int modalPlayer = Key_GetConsolePlayer();
+		const qboolean modalPlayerActive = (qboolean)( modalPlayer <= 1
+			? cls.state == CA_ACTIVE
+			: cl_splitClients[modalPlayer].enabled && cl_splitClients[modalPlayer].state == CA_ACTIVE );
+		if ( modalPlayerActive ) {
+			splitViewport = (qboolean)( ( Key_GetCatcher() & KEYCATCH_MESSAGE ) &&
+				Con_SplitScreenViewportForPlayer( Key_GetConsolePlayer(),
+					&viewportX, &viewportY, &viewportW, &viewportH ) );
+			if ( splitViewport ) {
+				SCR_SetViewportTransform( qtrue, viewportX, viewportY, viewportW, viewportH );
+			}
 			Con_DrawNotify ();
+			if ( splitViewport ) {
+				SCR_SetViewportTransform( qfalse, 0.0f, 0.0f, SCREEN_WIDTH, SCREEN_HEIGHT );
+			}
 		}
 	}
 }

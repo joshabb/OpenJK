@@ -3536,14 +3536,19 @@ static int G_CreateSplitScreenClient( gentity_t *owner, int player ) {
 static void Cmd_SplitScreenApplyProfile_f( gentity_t *ent ) {
 	int clientNum;
 	int player;
+	char playerArg[MAX_TOKEN_CHARS] = {0};
 	char userinfo[MAX_INFO_STRING] = {0};
 
 	if ( !ent || !ent->client || !ent->client->pers.localClient ) {
 		return;
 	}
 
-	player = G_SplitScreenPlayerArg( 1, 2 );
-	clientNum = G_FindSplitScreenClient( player );
+	trap->Argv( 1, playerArg, sizeof( playerArg ) );
+	player = atoi( playerArg );
+	if ( player < 1 || player > 4 ) {
+		player = 2;
+	}
+	clientNum = player == 1 ? ent->s.number : G_FindSplitScreenClient( player );
 	if ( clientNum == -1 ) {
 		return;
 	}
@@ -3708,6 +3713,7 @@ static void Cmd_SplitScreenStatus_f( gentity_t *ent ) {
 static void Cmd_SplitScreenAssertUserinfo_f( gentity_t *ent ) {
 	int player;
 	int clientNum;
+	char playerArg[MAX_TOKEN_CHARS] = {0};
 	char key[MAX_TOKEN_CHARS] = {0};
 	char expected[MAX_TOKEN_CHARS] = {0};
 	char userinfo[MAX_INFO_STRING] = {0};
@@ -3723,8 +3729,12 @@ static void Cmd_SplitScreenAssertUserinfo_f( gentity_t *ent ) {
 		return;
 	}
 
-	player = G_SplitScreenPlayerArg( 1, 2 );
-	clientNum = G_FindSplitScreenClient( player );
+	trap->Argv( 1, playerArg, sizeof( playerArg ) );
+	player = atoi( playerArg );
+	if ( player < 1 || player > 4 ) {
+		player = 2;
+	}
+	clientNum = player == 1 ? ent->s.number : G_FindSplitScreenClient( player );
 	trap->Argv( 2, key, sizeof( key ) );
 	trap->Argv( 3, expected, sizeof( expected ) );
 

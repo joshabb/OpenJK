@@ -142,7 +142,10 @@ void UI_DrawHandlePic( float x, float y, float w, float h, qhandle_t hShader ) {
 		t1 = 1;
 	}
 
-	UI_TransformRect( &x, &y, &w, &h );
+	UI_TransformPicRect( &x, &y, &w, &h, &s0, &t0, &s1, &t1 );
+	if ( w <= 0.0f || h <= 0.0f ) {
+		return;
+	}
 	trap->R_DrawStretchPic( x, y, w, h, s0, t0, s1, t1, hShader );
 }
 
