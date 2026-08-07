@@ -7,7 +7,10 @@ HERE = Path(__file__).resolve().parent
 
 
 def emit(players: int) -> None:
-    max_x = 280 if players == 4 else 600
+    max_x = 319 if players == 4 else 639
+    max_y = 239
+    vertical_max_x = 319 if players in (2, 4) else 639
+    vertical_max_y = 479 if players == 2 else 239
     assignments = [
         "set ui_splitScreenP1Input keyboard",
         "set ui_splitScreenP2Input controller1",
@@ -18,6 +21,7 @@ def emit(players: int) -> None:
         "set developer 1",
         "set con_notifytime 0",
         "set cl_splitScreen 1",
+        "set cl_splitScreenLayout 0",
         f"set ui_splitScreenPlayerCount {players}",
         "set cl_splitScreenLocalCmds 0",
         "set ui_splitScreenTraceInput 1",
@@ -37,17 +41,25 @@ def emit(players: int) -> None:
         "wait 60",
         "echo GP1-MOUSE:SURFACE-SETUP",
         f"screenshot_png gp1_mouse_{players}p_setup",
+        "echo GP1-MOUSE:HOVER-ISOLATION",
+        "splitinput_device_mouse -10000 -10000",
+        "splitinput_device_mouse 200 220",
+        "wait 2",
+        "splitui_assert ui_splitScreenP1SetupHasFocus 1",
+        "splitui_assert ui_splitScreenP2SetupHasFocus 0",
+        "splitui_assert ui_splitScreenP1SetupHoverVisible 1",
+        "splitui_assert ui_splitScreenP2SetupHoverVisible 0",
     ]
 
     points = [
         ("top_left", -10000, -10000, 0, 0),
         ("top_right", 10000, -10000, max_x, 0),
-        ("bottom_left", -10000, 10000, 0, 200),
-        ("bottom_right", 10000, 10000, max_x, 200),
-        ("left_edge", -10000, -100, 0, 100),
+        ("bottom_left", -10000, 10000, 0, max_y),
+        ("bottom_right", 10000, 10000, max_x, max_y),
+        ("left_edge", -10000, 100 - max_y, 0, 100),
         ("right_edge", 10000, 0, max_x, 100),
         ("top_edge", -100, -10000, max(0, max_x - 100), 0),
-        ("bottom_edge", 0, 10000, max(0, max_x - 100), 200),
+        ("bottom_edge", 0, 10000, max(0, max_x - 100), max_y),
     ]
     for name, dx, dy, x, y in points:
         lines += [
@@ -66,7 +78,7 @@ def emit(players: int) -> None:
         "splitinput_device_mouse 1000000 1000000",
         "splitinput_device_mouse 1000000 1000000",
         f"splitui_assert ui_splitScreenMouseCursorX {max_x}",
-        "splitui_assert ui_splitScreenMouseCursorY 200",
+        f"splitui_assert ui_splitScreenMouseCursorY {max_y}",
         "echo GP1-MOUSE:BOUNDARY-DRAG",
         "splitinput_device_key keyboard MOUSE1 1",
         "splitinput_device_mouse 1000000 1000000",
@@ -84,7 +96,7 @@ def emit(players: int) -> None:
         "set cl_splitScreenLayout 0",
         "splitinput_device_mouse 1000000 1000000",
         f"splitui_assert ui_splitScreenMouseCursorX {max_x}",
-        "splitui_assert ui_splitScreenMouseCursorY 200",
+        f"splitui_assert ui_splitScreenMouseCursorY {max_y}",
         "echo GP1-MOUSE:LAYOUT-VERTICAL",
         "set cl_splitScreenLayout 1",
         "splitinput_device_mouse -1000000 -1000000",
@@ -153,14 +165,14 @@ def emit(players: int) -> None:
         "wait 60",
         "splitinput_device_mouse 1000000 1000000",
         "splitui_assert ui_splitScreenMouseOwner 1",
-        f"splitui_assert ui_splitScreenMouseCursorX {max_x}",
-        "splitui_assert ui_splitScreenMouseCursorY 200",
+        f"splitui_assert ui_splitScreenMouseCursorX {vertical_max_x}",
+        f"splitui_assert ui_splitScreenMouseCursorY {vertical_max_y}",
         "echo GP1-MOUSE:COUNT-CHANGE",
         "set ui_splitScreenPlayerCount 4",
         "wait 30",
         "splitinput_device_mouse 1000000 1000000",
-        "splitui_assert ui_splitScreenMouseCursorX 280",
-        "splitui_assert ui_splitScreenMouseCursorY 200",
+        "splitui_assert ui_splitScreenMouseCursorX 319",
+        "splitui_assert ui_splitScreenMouseCursorY 239",
         f"set ui_splitScreenPlayerCount {players}",
         "echo GP1-MOUSE:REASSIGNMENT-POLICY",
         "ui_splitScreenP2Input",

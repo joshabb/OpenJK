@@ -170,6 +170,9 @@ for test_name in "${TESTS[@]}"; do
 		stock_browser_handoff)
 			required_patterns=("SplitUIAssert: PASS cvar=ui_splitScreenHostPending expected=0 actual=0" "SplitUIAssert: PASS cvar=ui_splitScreenPartyState expected=join_pending actual=join_pending")
 			;;
+		reported_startup_regressions_2p)
+			required_patterns=("SplitUIAssert: PASS cvar=ui_splitScreenSetupComplete expected=1 actual=1" "SplitUIAssert: PASS cvar=cl_splitScreenRenderReady expected=0 actual=0" "SplitNet party: using character profiles selected before connect" "SplitNet party: joined 2 preconfigured local players" "SplitUIAssert: PASS cvar=cl_splitScreenRenderReady expected=1 actual=1" "SplitUIAssert: PASS cvar=ui_splitScreenSetupComplete expected=0 actual=0" "SplitNetLifecycleAssert: PASS player=2 expected=ALIVE actual=ALIVE")
+			;;
 		controller_bind)
 			required_patterns=("Player 2 controller bind: \\+forward = JOY3" "cl_splitScreenP2Bind00 = .*3" "cl_splitScreenP2Bind01 = .*-1")
 			;;

@@ -33,7 +33,8 @@ Jedi Academy PK3 files. Single-player remains available through
 ## Start A Party
 
 1. Open **Multiplayer**, select **Play**, then select **Split Screen**.
-2. Choose 2, 3, or 4 players.
+2. Choose 2, 3, or 4 players. For a two-player party, choose either
+   **Top / Bottom** or **Left / Right** screen layout.
 3. Choose **Local Match** to create a game or **Server Party** to join an
    existing server.
 4. Assign keyboard and mouse or a controller to every player. Assignments are

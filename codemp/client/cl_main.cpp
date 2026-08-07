@@ -1364,6 +1364,7 @@ static void CL_SplitNetDisconnectPlayer( int player )
 	if ( Q_stricmp( oldStatus, "failed" ) ) {
 		CL_SplitNetSetStatus( player, "disconnected", NULL );
 	}
+	Cvar_Set( "cl_splitScreenRenderReady", "0" );
 }
 
 void CL_SplitNetDisconnectAll( void )
@@ -1452,6 +1453,7 @@ static void CL_SplitNetPartyConnect_f( void )
 	Cvar_Set( "cl_splitScreenPartyTarget", Cmd_Argv( 1 ) );
 	Cvar_Set( "ui_splitScreenPartyState", "connecting" );
 	Cvar_Set( "ui_splitScreenPartyError", "" );
+	Cvar_Set( "cl_splitScreenRenderReady", "0" );
 	cl_splitPartySetupQueued = qfalse;
 	/*
 	 * Stock servers apply sv_reconnectlimit to clients that share both an IP
@@ -1483,8 +1485,36 @@ static void CL_SplitNetPartyRetry_f( void )
 	}
 	Cvar_Set( "ui_splitScreenPartyState", "connecting" );
 	Cvar_Set( "ui_splitScreenPartyError", "" );
+	Cvar_Set( "cl_splitScreenRenderReady", "0" );
 	cl_splitPartySetupQueued = qfalse;
 	cl_splitNextPartyConnectTime = cls.realtime;
+}
+
+static qboolean CL_SplitNetJoinPreconfiguredPlayers( int playerCount )
+{
+	const char *serverInfo =
+		cl.gameState.stringData + cl.gameState.stringOffsets[CS_SERVERINFO];
+	const int gameType = atoi( Info_ValueForKey( serverInfo, "g_gametype" ) );
+	int player;
+
+	/*
+	 * Power Duel still needs a visible lone/double role choice. In every other
+	 * stock mode, "team free" is the normal join command: team modes balance
+	 * the player automatically and non-team modes enter TEAM_FREE.
+	 */
+	if ( gameType == GT_POWERDUEL ) {
+		return qfalse;
+	}
+
+	CL_AddReliableCommand( "team free", qfalse );
+	CL_AddReliableCommand( "forcechanged", qfalse );
+	for ( player = 2; player <= playerCount; player++ ) {
+		CL_SplitNetAddReliableCommand( player, "team free" );
+		CL_SplitNetAddReliableCommand( player, "forcechanged" );
+	}
+	Com_Printf( "SplitNet party: joined %i preconfigured local players\n",
+		playerCount );
+	return qtrue;
 }
 
 static void CL_SplitNetRejoin_f( void )
@@ -1604,13 +1634,23 @@ static void CL_SplitNetPartyFrame( void )
 			Cvar_Set( "ui_splitScreenHostPending", "0" );
 			Com_Printf( "SplitNet party: all %i local players active\n", playerCount );
 		}
+		Cvar_Set( "cl_splitScreenRenderReady", "1" );
 		if ( !cl_splitPartySetupQueued ) {
-			Cbuf_AddText( "splitscreen_setup 1\n" );
+			if ( Cvar_VariableIntegerValue( "ui_splitScreenSetupComplete" ) ) {
+				Com_Printf( "SplitNet party: using character profiles selected before connect\n" );
+				Cvar_Set( "ui_splitScreenSetupComplete", "0" );
+				if ( !CL_SplitNetJoinPreconfiguredPlayers( playerCount ) ) {
+					Cbuf_AddText( "splitscreen_setup 1\n" );
+				}
+			} else {
+				Cbuf_AddText( "splitscreen_setup 1\n" );
+			}
 			cl_splitPartySetupQueued = qtrue;
 		}
 		return;
 	}
 
+	Cvar_Set( "cl_splitScreenRenderReady", "0" );
 	if ( Q_stricmp( partyState, "connecting" ) || cls.state < CA_ACTIVE || !cl.snap.valid ) {
 		return;
 	}

@@ -2415,7 +2415,19 @@ extern void CG_ActualLoadDeferredPlayers( void );
 static int cg_siegeClassIndex = -2;
 
 static qboolean CG_SplitScreenEnabled( void ) {
-	return ( cl_splitScreen.integer != 0 ) ? qtrue : qfalse;
+	char renderReady[16];
+
+	if ( !cl_splitScreen.integer ) {
+		return qfalse;
+	}
+	trap->Cvar_VariableStringBuffer( "cl_splitScreenRenderReady", renderReady,
+		sizeof( renderReady ) );
+	/*
+	 * An unset value preserves local/synthetic split-screen behavior. Network
+	 * party startup explicitly holds this at zero until every requested view
+	 * has a live cgame, avoiding an empty black viewport during handshakes.
+	 */
+	return ( !renderReady[0] || atoi( renderReady ) ) ? qtrue : qfalse;
 }
 
 static int CG_SplitScreenPlayerCount( void ) {

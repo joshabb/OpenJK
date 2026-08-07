@@ -4,11 +4,19 @@
 
 The party screen offers keyboard and mouse plus every detected controller for
 each player. A device can belong to only one player. The default two-player
-layout is keyboard and mouse for Player 1 and Controller 1 for Player 2.
+device assignment is keyboard and mouse for Player 1 and Controller 1 for
+Player 2.
 
 Controllers are assigned by stable SDL slot for the session. Disconnecting and
 reconnecting a device triggers the normal SDL discovery path; reopen the party
 screen if the physical order changed.
+
+## Screen Layout
+
+Two-player parties can choose **Top / Bottom** or **Left / Right** on the party
+screen. The choice persists between launches and applies to player
+configuration, in-game menus, pointer confinement, and gameplay. Three- and
+four-player parties use the fixed grid layouts shown by the party screen.
 
 ## Player Configuration
 

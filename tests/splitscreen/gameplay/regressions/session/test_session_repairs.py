@@ -8,21 +8,23 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[5]
 SOURCE = (ROOT / "codemp/client/cl_main.cpp").read_text()
+UI_SOURCE = (ROOT / "codemp/ui/ui_main.c").read_text()
+CG_SOURCE = (ROOT / "codemp/cgame/cg_view.c").read_text()
 
 
-def function_body(name: str) -> str:
-    match = re.search(rf"\b{name}\s*\([^)]*\)\s*\{{", SOURCE)
+def function_body(name: str, source: str = SOURCE) -> str:
+    match = re.search(rf"\b{name}\s*\([^)]*\)\s*\{{", source)
     if not match:
         raise AssertionError(f"missing function {name}")
     start = match.end()
     depth = 1
     index = start
-    while depth and index < len(SOURCE):
-        depth += (SOURCE[index] == "{") - (SOURCE[index] == "}")
+    while depth and index < len(source):
+        depth += (source[index] == "{") - (source[index] == "}")
         index += 1
     if depth:
         raise AssertionError(f"unterminated function {name}")
-    return SOURCE[start:index - 1]
+    return source[start:index - 1]
 
 
 class SessionRepairContracts(unittest.TestCase):
@@ -102,6 +104,61 @@ class SessionRepairContracts(unittest.TestCase):
         self.assertIn("split->state == CA_CHALLENGING", body[:guard])
         self.assertIn("split->connection.connectTime = cls.realtime", body[guard:retry])
         self.assertLess(retry, failure)
+
+    def test_pre_game_profiles_suppress_the_redundant_post_connect_setup(self):
+        start = function_body("UI_StartSplitScreenServer", UI_SOURCE)
+        self.assertIn(
+            'trap->Cvar_Set( "ui_splitScreenSetupComplete", "1" )', start
+        )
+        join = function_body("CL_SplitNetJoinPreconfiguredPlayers")
+        self.assertIn('Info_ValueForKey( serverInfo, "g_gametype" )', join)
+        self.assertIn("gameType == GT_POWERDUEL", join)
+        self.assertIn('CL_AddReliableCommand( "team free", qfalse )', join)
+        self.assertIn(
+            'CL_SplitNetAddReliableCommand( player, "team free" )', join
+        )
+        self.assertIn('CL_AddReliableCommand( "forcechanged", qfalse )', join)
+
+        frame = function_body("CL_SplitNetPartyFrame")
+        ready = frame.index('Cvar_Set( "cl_splitScreenRenderReady", "1" )')
+        setup_guard = frame.index(
+            'Cvar_VariableIntegerValue( "ui_splitScreenSetupComplete" )',
+            ready,
+        )
+        consume = frame.index(
+            'Cvar_Set( "ui_splitScreenSetupComplete", "0" )',
+            setup_guard,
+        )
+        join_profiles = frame.index(
+            "CL_SplitNetJoinPreconfiguredPlayers( playerCount )", consume
+        )
+        fallback = frame.index(
+            'Cbuf_AddText( "splitscreen_setup 1\\n" )', join_profiles
+        )
+        queued = frame.index("cl_splitPartySetupQueued = qtrue", fallback)
+        self.assertLess(ready, setup_guard)
+        self.assertLess(setup_guard, consume)
+        self.assertLess(consume, join_profiles)
+        self.assertLess(join_profiles, fallback)
+        self.assertLess(fallback, queued)
+
+    def test_network_party_holds_split_rendering_until_every_view_is_live(self):
+        connect = function_body("CL_SplitNetPartyConnect_f")
+        retry = function_body("CL_SplitNetPartyRetry_f")
+        frame = function_body("CL_SplitNetPartyFrame")
+        disconnect = function_body("CL_SplitNetDisconnectPlayer")
+        for body in (connect, retry, disconnect):
+            self.assertIn('Cvar_Set( "cl_splitScreenRenderReady", "0" )', body)
+        self.assertIn('Cvar_Set( "cl_splitScreenRenderReady", "1" )', frame)
+        self.assertIn('Cvar_Set( "cl_splitScreenRenderReady", "0" )', frame)
+
+        enabled = function_body("CG_SplitScreenEnabled", CG_SOURCE)
+        self.assertIn(
+            'trap->Cvar_VariableStringBuffer( "cl_splitScreenRenderReady"',
+            enabled,
+        )
+        self.assertIn("!renderReady[0]", enabled)
+        self.assertIn("atoi( renderReady )", enabled)
 
 
 if __name__ == "__main__":
